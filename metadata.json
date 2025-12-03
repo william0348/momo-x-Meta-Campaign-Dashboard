@@ -1,0 +1,5 @@
+{
+  "name": "momo Daily Campaign Data",
+  "description": "A comprehensive dashboard for visualizing marketing campaign performance metrics including Spent, ROAS, CVR, and CPA with dynamic filtering.",
+  "requestFramePermissions": []
+}
