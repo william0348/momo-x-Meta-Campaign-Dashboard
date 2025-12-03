@@ -3,37 +3,48 @@ export interface CampaignData {
   id: string;
   date: string; // Normalized to YYYY-MM-DD
   campaignName: string;
-  spent: number;
-  cpc: number;
-  roas: number;
-  cvr: number; // Stored as decimal (e.g., 0.05 for 5%)
-  cpa: number;
-  // Computed fields for aggregation
-  clicks: number;
-  conversions: number;
-  revenue: number;
-  // Facebook Insights Data
-  reach?: number;
-  impressions?: number;
+
+  // Momo (Sheet/Excel) Metrics
+  spent: number; // Shared metric
+  momoCpc: number;
+  roas: number; // Shared metric
+  momoCvr: number;
+  momoCpa: number;
+  
+  // Facebook Insights Metrics
+  fbCpc?: number;
+  fbCtr?: number;
+  impressions?: number; // Needed for CTR calculation, but likely not displayed if user wants it removed from UI
   cpm?: number;
-  ctr?: number;
-  linkClicks?: number;
-  frequency?: number;
+  fbLinkClicks?: number;
+  fbPurchase?: number; // New: omni_purchase
+  fbCpa?: number;      // New: spent / purchase
+  fbCvr?: number;      // New: purchase / link_click
+
+  // Computed fields for aggregation
+  momoClicks: number;
+  momoConversions: number;
+  revenue: number;
 }
 
 export interface DashboardMetrics {
   totalSpent: number;
   avgRoas: number;
-  avgCvr: number;
-  avgCpa: number;
-  avgCpc: number;
+  
+  // Momo Metrics
+  avgMomoCvr: number;
+  avgMomoCpa: number;
+  avgMomoCpc: number;
+
   // Facebook Metrics
-  totalReach?: number;
-  totalImpressions?: number;
   avgCpm?: number;
-  avgCtr?: number;
-  avgFrequency?: number;
+  avgFbCtr?: number;
+  avgFbCpc?: number;
+  totalFbPurchase?: number; // New
+  avgFbCpa?: number;        // New
+  avgFbCvr?: number;        // New
 }
 
-export type SortField = keyof CampaignData;
+export type SortField = keyof CampaignData | 'fbCpc' | 'fbCtr' | 'fbPurchase' | 'fbCpa' | 'fbCvr';
 export type SortOrder = 'asc' | 'desc';
+export type MetricSource = 'momo' | 'fb';

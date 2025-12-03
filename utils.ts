@@ -36,42 +36,6 @@ const normalizeDate = (dateInput: string | number | Date): string => {
   return date.toISOString().split('T')[0];
 };
 
-export const parseCSV = (csv: string): CampaignData[] => {
-  const lines = csv.split('\n').filter((line) => line.trim() !== '');
-  const data: CampaignData[] = [];
-  for (let i = 1; i < lines.length; i++) {
-    const regex = /(".*?"|[^",\s]+)(?=\s*,|\s*$)/g;
-    const matches = lines[i].match(regex);
-    if (matches && matches.length >= 7) {
-      const cleanMatches = matches.map((m) => m.replace(/^"|"$/g, ''));
-      const [dateRaw, campaignName, spentStr, cpcStr, roasStr, cvrStr, cpaStr] = cleanMatches;
-      const spent = parseNumber(spentStr);
-      const cpc = parseNumber(cpcStr);
-      const roas = parseNumber(roasStr);
-      const cvr = parsePercentage(cvrStr); 
-      const cpa = parseNumber(cpaStr);
-      const clicks = cpc > 0 ? spent / cpc : 0;
-      const conversions = cpa > 0 ? spent / cpa : 0; 
-      const revenue = spent * roas;
-
-      data.push({
-        id: `${dateRaw}-${i}`, 
-        date: normalizeDate(dateRaw),
-        campaignName,
-        spent,
-        cpc,
-        roas,
-        cvr,
-        cpa,
-        clicks,
-        conversions,
-        revenue
-      });
-    }
-  }
-  return data;
-};
-
 // --- WebAuthn / Passkey Helpers ---
 
 /**
@@ -175,305 +139,293 @@ export const getPasskey = async (): Promise<string | null> => {
   return null;
 };
 
-export const parseSheetData = (values: any[][]): CampaignData[] => {
-  if (!values || values.length < 2) return [];
-
-  const headers = values[0].map(h => String(h).trim());
-  const data: CampaignData[] = [];
-
-  const findIndex = (candidates: string[]) => {
-    for (const candidate of candidates) {
-      let idx = headers.indexOf(candidate);
-      if (idx !== -1) return idx;
-      idx = headers.findIndex(h => h.toLowerCase() === candidate.toLowerCase());
-      if (idx !== -1) return idx;
-    }
-    const englishCandidates = candidates.filter(c => /^[a-zA-Z]+$/.test(c));
-    for (const eng of englishCandidates) {
-       const idx = headers.findIndex(h => h.toLowerCase().includes(eng.toLowerCase()));
-       if (idx !== -1) return idx;
-    }
-    return -1;
-  };
-
-  const dateIdx = findIndex(['日期', 'Date']);
-  const campaignIdx = findIndex(['廣告活動', 'Campaign', 'Campaign Name']);
-  const spentIdx = findIndex(['費用', 'spent', 'Spent']);
-  const cpcIdx = findIndex(['流量成本', 'cpc', 'CPC']);
-  const roasIdx = findIndex(['ROAS', 'roas']);
-  const cvrIdx = findIndex(['CVR', 'cvr']);
-  const cpaIdx = findIndex(['CPA', 'cpa']);
+const mapRowToCampaignData = (row: any[], index: number, headers: string[]): CampaignData | null => {
+    const findIndex = (candidates: string[]) => {
+      for (const candidate of candidates) {
+        let idx = headers.indexOf(candidate);
+        if (idx !== -1) return idx;
+        idx = headers.findIndex(h => h.toLowerCase() === candidate.toLowerCase());
+        if (idx !== -1) return idx;
+      }
+      return -1;
+    };
   
-  // FB specific indices might exist if previously merged and saved
-  const reachIdx = findIndex(['Reach', 'reach']);
-  const impIdx = findIndex(['Impressions', 'impressions']);
-  const cpmIdx = findIndex(['CPM', 'cpm']);
-  const ctrIdx = findIndex(['CTR', 'ctr']);
-  const freqIdx = findIndex(['Frequency', 'frequency']);
-
-  for (let i = 1; i < values.length; i++) {
-    const row = values[i];
-    if (!row || row.length === 0) continue;
+    // Momo Metrics Indices
+    const dateIdx = findIndex(['日期', 'Date']);
+    const campaignIdx = findIndex(['廣告活動', 'Campaign Name']);
+    const spentIdx = findIndex(['費用', 'Spent']);
+    const cpcIdx = findIndex(['流量成本', 'CPC']);
+    const roasIdx = findIndex(['ROAS']);
+    const cvrIdx = findIndex(['CVR']);
+    const cpaIdx = findIndex(['CPA']);
+  
+    // Facebook Metrics Indices
+    const fbPurchaseIdx = findIndex(['FB Purchases', 'Purchases', 'fbPurchase']);
+    const fbCpaIdx = findIndex(['FB CPA', 'fbCpa']);
+    const fbCvrIdx = findIndex(['FB CVR', 'fbCvr']);
+    const fbCpcIdx = findIndex(['FB CPC', 'fbCpc']);
+    const fbCtrIdx = findIndex(['FB CTR', 'fbCtr']);
+    const cpmIdx = findIndex(['CPM']);
+    const fbClicksIdx = findIndex(['FB Link Clicks', 'Link Clicks', 'fbLinkClicks']);
+    const imprIdx = findIndex(['Impressions']);
 
     const dateRaw = dateIdx !== -1 ? row[dateIdx] : undefined;
     const campaignName = campaignIdx !== -1 ? row[campaignIdx] : undefined;
-
-    if (!dateRaw || !campaignName) continue;
-
+  
+    if (!dateRaw || !campaignName) return null;
+  
+    // Parse Momo Data
     const spent = spentIdx !== -1 ? parseNumber(row[spentIdx]) : 0;
-    const cpc = cpcIdx !== -1 ? parseNumber(row[cpcIdx]) : 0;
+    const momoCpc = cpcIdx !== -1 ? parseNumber(row[cpcIdx]) : 0;
     const roas = roasIdx !== -1 ? parseNumber(row[roasIdx]) : 0;
-    const cvr = cvrIdx !== -1 ? parsePercentage(row[cvrIdx]) : 0;
-    const cpa = cpaIdx !== -1 ? parseNumber(row[cpaIdx]) : 0;
-
-    const reach = reachIdx !== -1 ? parseNumber(row[reachIdx]) : undefined;
-    const impressions = impIdx !== -1 ? parseNumber(row[impIdx]) : undefined;
-    const cpm = cpmIdx !== -1 ? parseNumber(row[cpmIdx]) : undefined;
-    const ctr = ctrIdx !== -1 ? parsePercentage(row[ctrIdx]) : undefined;
-    const frequency = freqIdx !== -1 ? parseNumber(row[freqIdx]) : undefined;
+    const momoCvr = cvrIdx !== -1 ? parsePercentage(row[cvrIdx]) : 0;
+    const momoCpa = cpaIdx !== -1 ? parseNumber(row[cpaIdx]) : 0;
+    
+    // Parse Facebook Data (if present in sheet)
+    const fbPurchase = fbPurchaseIdx !== -1 ? parseNumber(row[fbPurchaseIdx]) : 0;
+    const fbCpa = fbCpaIdx !== -1 ? parseNumber(row[fbCpaIdx]) : 0;
+    const fbCvr = fbCvrIdx !== -1 ? parsePercentage(row[fbCvrIdx]) : 0;
+    const fbCpc = fbCpcIdx !== -1 ? parseNumber(row[fbCpcIdx]) : 0;
+    const fbCtr = fbCtrIdx !== -1 ? parsePercentage(row[fbCtrIdx]) : 0;
+    const cpm = cpmIdx !== -1 ? parseNumber(row[cpmIdx]) : 0;
+    const fbLinkClicks = fbClicksIdx !== -1 ? parseNumber(row[fbClicksIdx]) : 0;
+    const impressions = imprIdx !== -1 ? parseNumber(row[imprIdx]) : 0;
 
     const dateNormalized = normalizeDate(dateRaw);
-    if (!dateNormalized) continue;
-
-    const clicks = cpc > 0 ? spent / cpc : 0;
-    const conversions = cpa > 0 ? spent / cpa : 0;
+    if (!dateNormalized) return null;
+  
+    const momoClicks = momoCpc > 0 ? spent / momoCpc : 0;
+    const momoConversions = momoCpa > 0 ? spent / momoCpa : 0;
     const revenue = spent * roas;
-
-    data.push({
-      id: `${dateNormalized}-${i}-${Math.random().toString(36).substr(2, 5)}`,
+  
+    return {
+      id: `${dateNormalized}-${index}-${Math.random().toString(36).substr(2, 5)}`,
       date: dateNormalized,
       campaignName: String(campaignName).trim(),
       spent,
-      cpc,
+      momoCpc,
       roas,
-      cvr,
-      cpa,
-      clicks,
-      conversions,
+      momoCvr,
+      momoCpa,
+      momoClicks,
+      momoConversions,
       revenue,
-      reach,
-      impressions,
+      // FB fields
+      fbPurchase,
+      fbCpa,
+      fbCvr,
+      fbCpc,
+      fbCtr,
       cpm,
-      ctr,
-      frequency
-    });
-  }
+      fbLinkClicks,
+      impressions
+    };
+  };
 
-  return data;
+export const parseSheetData = (values: any[][]): CampaignData[] => {
+  if (!values || values.length < 2) return [];
+  const headers = values[0].map(h => String(h).trim());
+  return values.slice(1)
+    .map((row, index) => mapRowToCampaignData(row, index, headers))
+    .filter((item): item is CampaignData => item !== null);
 };
 
 export const readExcelFile = (file: File): Promise<CampaignData[]> => {
-  return new Promise((resolve, reject) => {
-    const reader = new FileReader();
-    
-    reader.onload = (e) => {
-      try {
-        const data = e.target?.result;
-        const workbook = XLSX.read(data, { type: 'array' });
-        const sheetName = workbook.SheetNames[0];
-        const worksheet = workbook.Sheets[sheetName];
-        const jsonData: any[] = XLSX.utils.sheet_to_json(worksheet);
-
-        const parsedData: CampaignData[] = jsonData.map((row, index) => {
-          const rowKeys = Object.keys(row);
-          const findValue = (candidates: string[]) => {
-            for (const candidate of candidates) {
-              if (row[candidate] !== undefined) return row[candidate];
-              const trimmedKey = rowKeys.find(k => k.trim() === candidate);
-              if (trimmedKey && row[trimmedKey] !== undefined) return row[trimmedKey];
-            }
-            const englishCandidates = candidates.filter(c => /^[a-zA-Z]+$/.test(c));
-            for (const eng of englishCandidates) {
-               const fuzzyKey = rowKeys.find(k => k.toLowerCase().includes(eng.toLowerCase()));
-               if (fuzzyKey && row[fuzzyKey] !== undefined) return row[fuzzyKey];
-            }
-            return undefined;
-          };
-
-          const dateRaw = findValue(['日期', 'Date']);
-          const campaignName = findValue(['廣告活動', 'Campaign']);
-          const spentStr = findValue(['費用', 'spent']); 
-          const cpcStr = findValue(['流量成本', 'cpc']); 
-          const roasStr = findValue(['ROAS', 'roas']);
-          const cvrStr = findValue(['CVR', 'cvr']);
-          const cpaStr = findValue(['CPA', 'cpa']);
-
-          const spent = parseNumber(spentStr);
-          const cpc = parseNumber(cpcStr);
-          const roas = parseNumber(roasStr);
-          const cvr = parsePercentage(cvrStr);
-          const cpa = parseNumber(cpaStr);
-
-          const clicks = cpc > 0 ? spent / cpc : 0;
-          const conversions = cpa > 0 ? spent / cpa : 0; 
-          const revenue = spent * roas;
-          const dateNormalized = normalizeDate(dateRaw);
-
-          if (!dateNormalized || !campaignName) return null;
-
-          return {
-            id: `${dateNormalized}-${index}-${Math.random().toString(36).substr(2, 9)}`,
-            date: dateNormalized,
-            campaignName: String(campaignName).trim(),
-            spent,
-            cpc,
-            roas,
-            cvr,
-            cpa,
-            clicks,
-            conversions,
-            revenue
-          };
-        }).filter((item): item is CampaignData => item !== null);
-
-        resolve(parsedData);
-      } catch (err) {
-        reject(err);
-      }
-    };
-    reader.onerror = (err) => reject(err);
-    reader.readAsArrayBuffer(file);
-  });
-};
+    return new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = (e) => {
+        try {
+          const data = e.target?.result;
+          const workbook = XLSX.read(data, { type: 'array' });
+          const sheetName = workbook.SheetNames[0];
+          const worksheet = workbook.Sheets[sheetName];
+          const jsonData: any[][] = XLSX.utils.sheet_to_json(worksheet, { header: 1 });
+          const headers = jsonData[0].map(h => String(h).trim());
+          const parsedData = jsonData.slice(1)
+            .map((row, index) => mapRowToCampaignData(row, index, headers))
+            .filter((item): item is CampaignData => item !== null);
+          resolve(parsedData);
+        } catch (err) {
+          reject(err);
+        }
+      };
+      reader.onerror = (err) => reject(err);
+      reader.readAsArrayBuffer(file);
+    });
+  };
 
 export const mergeCampaignData = (existing: CampaignData[], incoming: CampaignData[]): CampaignData[] => {
   const map = new Map<string, CampaignData>();
+  
+  // 1. Add all existing data to map
   existing.forEach(item => {
-    const key = `${item.date}|${item.campaignName}`;
+    const key = `${item.date}|${item.campaignName.trim()}`;
     map.set(key, item);
   });
+
+  // 2. Add incoming data ONLY if it doesn't already exist
+  // This prioritizes existing data and only appends strictly new records.
   incoming.forEach(item => {
-    const key = `${item.date}|${item.campaignName}`;
-    const existingItem = map.get(key);
-    // Keep FB data if incoming (from excel) doesn't have it
-    if(existingItem) {
-        if (!item.reach && existingItem.reach) item.reach = existingItem.reach;
-        if (!item.impressions && existingItem.impressions) item.impressions = existingItem.impressions;
-        if (!item.cpm && existingItem.cpm) item.cpm = existingItem.cpm;
-        if (!item.ctr && existingItem.ctr) item.ctr = existingItem.ctr;
-        if (!item.frequency && existingItem.frequency) item.frequency = existingItem.frequency;
-        if (!item.linkClicks && existingItem.linkClicks) item.linkClicks = existingItem.linkClicks;
+    const key = `${item.date}|${item.campaignName.trim()}`;
+    if (!map.has(key)) {
+        map.set(key, item);
     }
-    map.set(key, item);
   });
+
   return Array.from(map.values()).sort((a, b) => 
     new Date(a.date).getTime() - new Date(b.date).getTime()
   );
 };
 
-export const fetchFacebookInsights = async (accessToken: string, adAccountId: string, startDate?: string, endDate?: string): Promise<CampaignData[]> => {
-  try {
-    // 1. Determine Date Range
-    // If no dates provided, use "last_30d" or similar, but typically we want alignment.
-    // However, API requires specific format for time_range
-    const timeRangeStr = (startDate && endDate) 
-        ? `&time_range={"since":"${startDate}","until":"${endDate}"}`
-        : `&date_preset=maximum`; // fallback if no dates
+// --- Facebook API Helpers ---
 
-    // 2. Build URL
-    // Fields: campaign_id,campaign_name,spend,reach,impressions,actions
-    // Time Increment: 1 (Daily)
-    // Filter: action_type IN ["link_click", "omni_purchase"]
-    const fields = 'campaign_id,campaign_name,spend,reach,impressions,actions';
+const fetchPage = async (url: string): Promise<any> => {
+    const response = await fetch(url);
+    if (!response.ok) {
+        const errorData = await response.json();
+        console.error("Facebook API Error Details:", errorData.error);
+        throw new Error(errorData.error?.message || `HTTP error! status: ${response.status}`);
+    }
+    return response.json();
+}
+
+// Helper to add days to a date string YYYY-MM-DD
+const addDaysToDate = (dateStr: string, days: number): string => {
+    const date = new Date(dateStr);
+    date.setDate(date.getDate() + days);
+    return date.toISOString().split('T')[0];
+};
+
+/**
+ * Fetches Facebook Insights with chunking to avoid large request errors.
+ * Breaks the requested date range into 30-day chunks.
+ */
+export const fetchFacebookInsights = async (accessToken: string, adAccountId: string, startDate?: string, endDate?: string): Promise<Partial<CampaignData>[]> => {
+  try {
+    // Basic fields configuration - Removed 'reach', added 'omni_purchase' via actions
+    const fields = 'campaign_id,campaign_name,spend,impressions,actions';
     const filtering = encodeURIComponent(JSON.stringify([{ field: "action_type", operator: "IN", value: ["link_click", "omni_purchase"] }]));
     
-    // Using v19.0 as stable version
-    const url = `https://graph.facebook.com/v19.0/act_${adAccountId}/insights?level=campaign&fields=${fields}&time_increment=1&filtering=${filtering}${timeRangeStr}&access_token=${accessToken}&limit=1000`;
-    
-    const response = await fetch(url);
-    const result = await response.json();
-    
-    if (result.error) {
-      console.error("Facebook API Error Details:", result.error);
-      throw new Error(result.error.message);
+    // Determine the full range to fetch
+    // If no dates provided, fallback to maximum (not recommended for large accounts)
+    if (!startDate || !endDate) {
+        // Fallback for no date selection (risky for large data)
+        const url = `https://graph.facebook.com/v19.0/act_${adAccountId}/insights?level=campaign&fields=${fields}&time_increment=1&filtering=${filtering}&date_preset=maximum&access_token=${accessToken}&limit=500`;
+        const result = await fetchAllPages(url);
+        return processFbRawData(result);
     }
-    
-    if (!result.data) {
-        return [];
-    }
-    
-    return result.data.map((item: any, index: number) => {
-      const spent = parseFloat(item.spend || '0');
-      const impressions = parseInt(item.impressions || '0');
-      const reach = parseInt(item.reach || '0');
-      
-      // Parse Actions for link_click
-      let linkClicks = 0;
-      if (Array.isArray(item.actions)) {
-          const clickAction = item.actions.find((action: any) => action.action_type === 'link_click');
-          if (clickAction) {
-              linkClicks = parseInt(clickAction.value || '0');
-          }
-      }
 
-      // --- Metrics Calculations ---
-      // CPM = spent / (impressions / 1000)
-      const cpm = impressions > 0 ? spent / (impressions / 1000) : 0;
-      
-      // Frequency = impressions / reach
-      const frequency = reach > 0 ? impressions / reach : 0;
-      
-      // CPC = spent / link_click
-      const cpc = linkClicks > 0 ? spent / linkClicks : 0;
-      
-      // CTR = link_click / impressions
-      const ctr = impressions > 0 ? linkClicks / impressions : 0;
-      
-      return {
-        id: `fb-${item.date_start}-${item.campaign_id}-${index}`,
-        date: item.date_start, // date_start is the day
-        campaignName: item.campaign_name,
-        spent: spent, // API returns string, float parsed
-        cpc: cpc,
-        roas: 0,
-        cvr: 0, 
-        cpa: 0,
-        clicks: linkClicks, // mapping link clicks to clicks
-        conversions: 0,
-        revenue: 0,
-        reach,
-        impressions,
-        cpm,
-        ctr,
-        linkClicks,
-        frequency
-      } as CampaignData;
-    });
+    // --- Date Chunking Logic ---
+    let allRawData: any[] = [];
+    let currentChunkStart = startDate;
+    const finalDate = new Date(endDate);
+
+    while (new Date(currentChunkStart) <= finalDate) {
+        // Define chunk end (Start + 30 days)
+        let currentChunkEnd = addDaysToDate(currentChunkStart, 30);
+        
+        // Cap chunk end at the final requested end date
+        if (new Date(currentChunkEnd) > finalDate) {
+            currentChunkEnd = endDate;
+        }
+
+        const timeRange = `&time_range={"since":"${currentChunkStart}","until":"${currentChunkEnd}"}`;
+        const url = `https://graph.facebook.com/v19.0/act_${adAccountId}/insights?level=campaign&fields=${fields}&time_increment=1&filtering=${filtering}${timeRange}&access_token=${accessToken}&limit=500`;
+        
+        // Fetch all pages for this chunk
+        const chunkData = await fetchAllPages(url);
+        allRawData = allRawData.concat(chunkData);
+
+        // Move to next day after current chunk
+        currentChunkStart = addDaysToDate(currentChunkEnd, 1);
+    }
+    
+    return processFbRawData(allRawData);
+
   } catch (error) {
     console.error("Facebook API Error:", error);
     throw error;
   }
 };
 
-export const mergeFacebookData = (sheetData: CampaignData[], fbData: CampaignData[]): CampaignData[] => {
-  const map = new Map<string, CampaignData>();
-  
-  sheetData.forEach(item => {
-    map.set(`${item.date}|${item.campaignName.trim()}`, { ...item });
-  });
+// Helper to handle pagination for a specific URL
+const fetchAllPages = async (initialUrl: string): Promise<any[]> => {
+    let allData: any[] = [];
+    let url: string | undefined = initialUrl;
 
-  fbData.forEach(fbItem => {
-    const key = `${fbItem.date}|${fbItem.campaignName.trim()}`;
-    const existing = map.get(key);
-    
-    if (existing) {
-      map.set(key, {
-        ...existing,
-        reach: fbItem.reach,
-        impressions: fbItem.impressions,
-        cpm: fbItem.cpm,
-        ctr: fbItem.ctr,
-        linkClicks: fbItem.linkClicks,
-        frequency: fbItem.frequency,
-        // Optional: override spent/cpc if you want API to be truth source
-      });
+    while (url) {
+        const result = await fetchPage(url);
+        if (result.data) {
+            allData = allData.concat(result.data);
+        }
+        url = result.paging?.next;
     }
-  });
-
-  return Array.from(map.values()).sort((a, b) => 
-    new Date(a.date).getTime() - new Date(b.date).getTime()
-  );
+    return allData;
 };
+
+// Helper to process the raw array into CampaignData
+const processFbRawData = (data: any[]): Partial<CampaignData>[] => {
+    return data.map((item: any) => {
+        const spent = parseFloat(item.spend || '0');
+        const impressions = parseInt(item.impressions || '0');
+        
+        let linkClicks = 0;
+        let purchases = 0;
+
+        if (Array.isArray(item.actions)) {
+            const clickAction = item.actions.find((action: any) => action.action_type === 'link_click');
+            if (clickAction) {
+                linkClicks = parseInt(clickAction.value || '0');
+            }
+            const purchaseAction = item.actions.find((action: any) => action.action_type === 'omni_purchase');
+            if (purchaseAction) {
+                purchases = parseInt(purchaseAction.value || '0');
+            }
+        }
+
+        // New Formulas
+        // cpc = spend / link_click
+        const fbCpc = linkClicks > 0 ? spent / linkClicks : 0;
+        // ctr = link_click / impressions
+        const fbCtr = impressions > 0 ? linkClicks / impressions : 0;
+        // CPA = spend / Purchase
+        const fbCpa = purchases > 0 ? spent / purchases : 0;
+        // CVR = Purchase / link_click
+        const fbCvr = linkClicks > 0 ? purchases / linkClicks : 0;
+
+        return {
+            date: item.date_start,
+            campaignName: item.campaign_name,
+            impressions,
+            cpm: impressions > 0 ? spent / (impressions / 1000) : 0,
+            fbCpc,
+            fbCtr,
+            fbLinkClicks: linkClicks,
+            fbPurchase: purchases,
+            fbCpa,
+            fbCvr
+        };
+    });
+};
+
+export const mergeFacebookData = (sheetData: CampaignData[], fbData: Partial<CampaignData>[]): CampaignData[] => {
+    const fbMap = new Map<string, Partial<CampaignData>>();
+    fbData.forEach(fbItem => {
+        if (fbItem.date && fbItem.campaignName) {
+            fbMap.set(`${fbItem.date}|${fbItem.campaignName.trim()}`, fbItem);
+        }
+    });
+
+    return sheetData.map(sheetItem => {
+        const key = `${sheetItem.date}|${sheetItem.campaignName.trim()}`;
+        const fbMatch = fbMap.get(key);
+        if (fbMatch) {
+            return { ...sheetItem, ...fbMatch };
+        }
+        return sheetItem;
+    }).sort((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime());
+};
+
 
 export const formatCurrency = (value: number) => {
   return new Intl.NumberFormat('en-US', {
@@ -489,11 +441,19 @@ export const formatPercentage = (value: number) => {
 };
 
 export const formatNumber = (value: number) => {
-  return new Intl.NumberFormat('en-US', {
-    maximumFractionDigits: 2,
-  }).format(value);
+    if (value === 0) return '0';
+    if (!value) return '-';
+    // Format integers without decimals
+    if (Number.isInteger(value)) {
+       return new Intl.NumberFormat('en-US').format(value);
+    }
+    return new Intl.NumberFormat('en-US', {
+      maximumFractionDigits: 2,
+    }).format(value);
 };
 
 export const formatDecimal = (value: number) => {
+  if (value === 0) return '0.0';
+  if (!value) return '-';
   return value.toFixed(1);
 };
