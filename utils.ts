@@ -279,14 +279,31 @@ export const mergeCampaignData = (existing: CampaignData[], incoming: CampaignDa
 
 // --- Facebook API Helpers ---
 
-const fetchPage = async (url: string): Promise<any> => {
+const sleep = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
+
+const RATE_LIMIT_CODES = new Set([4, 17, 32, 613, 80000, 80003, 80004]);
+
+const fetchPage = async (url: string, attempt = 0): Promise<any> => {
     const response = await fetch(url);
-    if (!response.ok) {
-        const errorData = await response.json();
-        console.error("Facebook API Error Details:", errorData.error);
-        throw new Error(errorData.error?.message || `HTTP error! status: ${response.status}`);
+    const json = await response.json();
+
+    if (!response.ok || json.error) {
+        const err = json.error || {};
+        const code = err.code;
+        console.error("Facebook API Error:", err);
+
+        // Rate limit — retry with exponential backoff (max 4 retries)
+        if (RATE_LIMIT_CODES.has(code) && attempt < 4) {
+            const wait = Math.pow(2, attempt + 1) * 5000; // 10s, 20s, 40s, 80s
+            console.warn(`Rate limit hit (code ${code}). Waiting ${wait / 1000}s before retry ${attempt + 1}/4...`);
+            await sleep(wait);
+            return fetchPage(url, attempt + 1);
+        }
+
+        throw new Error(err.message || `HTTP error! status: ${response.status}`);
     }
-    return response.json();
+
+    return json;
 }
 
 // Helper to add days to a date string YYYY-MM-DD
@@ -338,6 +355,11 @@ export const fetchFacebookInsights = async (accessToken: string, adAccountId: st
 
         // Move to next day after current chunk
         currentChunkStart = addDaysToDate(currentChunkEnd, 1);
+
+        // Delay between chunks to avoid rate limiting
+        if (new Date(currentChunkStart) <= finalDate) {
+            await sleep(1500);
+        }
     }
     
     return processFbRawData(allRawData);
