@@ -20,7 +20,7 @@ import { LayoutDashboard, Loader2, Fingerprint } from 'lucide-react';
 
 const App: React.FC = () => {
   // --- State: Auth ---
-  const [isAuthenticated, setIsAuthenticated] = useState(false);
+  const [isAuthenticated, setIsAuthenticated] = useState(true);
   const [currentUserEmail, setCurrentUserEmail] = useState('');
   const [loginError, setLoginError] = useState('');
 

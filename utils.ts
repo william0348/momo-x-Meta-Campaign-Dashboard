@@ -152,8 +152,8 @@ const mapRowToCampaignData = (row: any[], index: number, headers: string[]): Cam
   
     // Momo Metrics Indices
     const dateIdx = findIndex(['日期', 'Date']);
-    const campaignIdx = findIndex(['廣告活動', 'Campaign Name']);
-    const spentIdx = findIndex(['費用', 'Spent']);
+    const campaignIdx = findIndex(['廣告活動', '廣告後台名稱', 'Campaign Name']);
+    const spentIdx = findIndex(['費用', '花費', 'Spent']);
     const cpcIdx = findIndex(['流量成本', 'CPC']);
     const roasIdx = findIndex(['ROAS']);
     const cvrIdx = findIndex(['CVR']);
