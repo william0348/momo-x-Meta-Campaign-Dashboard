@@ -149,18 +149,22 @@ const App: React.FC = () => {
   // --- Aggregation for Table View (Group by Campaign Name) ---
   const aggregatedTableData = useMemo(() => {
     const map = new Map<string, CampaignData>();
+    // Spend-weighted momoCtr average: sum(momoCtr*spent) / sum(spent), but only over
+    // rows that actually reported a momoCtr — mixing in non-CTR rows' spend would dilute it.
+    const momoCtrValueByKey = new Map<string, number>();
+    const momoCtrSpendByKey = new Map<string, number>();
     filteredData.forEach(item => {
       const key = item.campaignName;
       if (!map.has(key)) {
-        map.set(key, { 
-            ...item, 
-            id: key, 
-            date: 'Range', 
-            spent: 0, 
-            revenue: 0, 
-            momoClicks: 0, 
-            momoConversions: 0, 
-            impressions: 0, 
+        map.set(key, {
+            ...item,
+            id: key,
+            date: 'Range',
+            spent: 0,
+            revenue: 0,
+            momoClicks: 0,
+            momoConversions: 0,
+            impressions: 0,
             fbLinkClicks: 0,
             fbPurchase: 0
         });
@@ -173,15 +177,20 @@ const App: React.FC = () => {
       agg.impressions = (agg.impressions || 0) + (item.impressions || 0);
       agg.fbLinkClicks = (agg.fbLinkClicks || 0) + (item.fbLinkClicks || 0);
       agg.fbPurchase = (agg.fbPurchase || 0) + (item.fbPurchase || 0);
+      if (item.momoCtr !== undefined) {
+        momoCtrValueByKey.set(key, (momoCtrValueByKey.get(key) || 0) + item.momoCtr * item.spent);
+        momoCtrSpendByKey.set(key, (momoCtrSpendByKey.get(key) || 0) + item.spent);
+      }
     });
 
-    const aggregatedList = Array.from(map.values()).map(item => ({
+    const aggregatedList = Array.from(map.entries()).map(([key, item]) => ({
         ...item,
         roas: item.spent > 0 ? item.revenue / item.spent : 0,
         momoCpc: item.momoClicks > 0 ? item.spent / item.momoClicks : 0,
         momoCvr: item.momoClicks > 0 ? item.momoConversions / item.momoClicks : 0,
         momoCpa: item.momoConversions > 0 ? item.spent / item.momoConversions : 0,
-        
+        momoCtr: (momoCtrSpendByKey.get(key) || 0) > 0 ? momoCtrValueByKey.get(key)! / momoCtrSpendByKey.get(key)! : undefined,
+
         fbCpc: (item.fbLinkClicks || 0) > 0 ? item.spent / (item.fbLinkClicks || 0) : 0,
         cpm: (item.impressions || 0) > 0 ? item.spent / ((item.impressions || 0) / 1000) : 0,
         fbCtr: (item.impressions || 0) > 0 ? (item.fbLinkClicks || 0) / (item.impressions || 0) : 0,
@@ -209,6 +218,10 @@ const App: React.FC = () => {
     }
     
     const map = new Map<string, Partial<CampaignData>>();
+    // Spend-weighted momoCtr average: sum(momoCtr*spent) / sum(spent), but only over
+    // rows that actually reported a momoCtr — mixing in non-CTR rows' spend would dilute it.
+    const momoCtrValueByDate = new Map<string, number>();
+    const momoCtrSpendByDate = new Map<string, number>();
     base.forEach(item => {
       if (!map.has(item.date)) {
         map.set(item.date, { date: item.date, spent: 0, revenue: 0, momoClicks: 0, momoConversions: 0, impressions: 0, fbLinkClicks: 0, fbPurchase: 0 });
@@ -221,14 +234,19 @@ const App: React.FC = () => {
       entry.impressions = (entry.impressions || 0) + (item.impressions || 0);
       entry.fbLinkClicks = (entry.fbLinkClicks || 0) + (item.fbLinkClicks || 0);
       entry.fbPurchase = (entry.fbPurchase || 0) + (item.fbPurchase || 0);
+      if (item.momoCtr !== undefined) {
+        momoCtrValueByDate.set(item.date, (momoCtrValueByDate.get(item.date) || 0) + item.momoCtr * item.spent);
+        momoCtrSpendByDate.set(item.date, (momoCtrSpendByDate.get(item.date) || 0) + item.spent);
+      }
     });
-    return Array.from(map.values()).sort((a, b) => a.date!.localeCompare(b.date!)).map(d => ({
+    return Array.from(map.entries()).sort((a, b) => a[0].localeCompare(b[0])).map(([date, d]) => ({
       ...d,
       roas: d.spent! > 0 ? d.revenue! / d.spent! : 0,
       momoCpc: d.momoClicks! > 0 ? d.spent! / d.momoClicks! : 0,
       momoCpa: d.momoConversions! > 0 ? d.spent! / d.momoConversions! : 0,
       momoCvr: d.momoClicks! > 0 ? d.momoConversions! / d.momoClicks! : 0,
-      
+      momoCtr: (momoCtrSpendByDate.get(date) || 0) > 0 ? momoCtrValueByDate.get(date)! / momoCtrSpendByDate.get(date)! : undefined,
+
       fbCpc: d.fbLinkClicks! > 0 ? d.spent! / d.fbLinkClicks! : 0,
       fbCtr: d.impressions! > 0 ? d.fbLinkClicks! / d.impressions! : 0,
       fbCpa: d.fbPurchase! > 0 ? d.spent! / d.fbPurchase! : 0,
@@ -366,7 +384,7 @@ const App: React.FC = () => {
       
       // Save both Momo and Facebook metrics to ensure complete data persistence
       const header = [
-        "Date", "Campaign Name", "Spent", "ROAS", "CPC", "CPA", "CVR",
+        "Date", "Campaign Name", "Spent", "ROAS", "CPC", "CPA", "CVR", "CTR",
         "FB Purchases", "FB CPA", "FB CVR", "FB CPC", "FB CTR", "CPM", "FB Link Clicks", "Impressions"
       ];
       const values = dataToSave.map(row => [
@@ -377,6 +395,7 @@ const App: React.FC = () => {
         row.momoCpc,
         row.momoCpa,
         row.momoCvr,
+        row.momoCtr || 0,
         // FB Metrics
         row.fbPurchase || 0,
         row.fbCpa || 0,

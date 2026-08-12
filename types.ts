@@ -10,7 +10,8 @@ export interface CampaignData {
   roas: number; // Shared metric
   momoCvr: number;
   momoCpa: number;
-  
+  momoCtr?: number; // momo's own CTR, when the source sheet provides it directly
+
   // Facebook Insights Metrics
   fbCpc?: number;
   fbCtr?: number;

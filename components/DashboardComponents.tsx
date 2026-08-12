@@ -368,11 +368,17 @@ const EFFICIENCY_METRIC_LABELS: Record<EfficiencyMetricKey, string> = {
 };
 
 // Resolve a metric key to the actual field name on chartData, given the current Momo/FB source.
-// CTR is always sourced from Facebook impression data since Momo has no equivalent metric.
 const resolveEfficiencyField = (metric: EfficiencyMetricKey, source: MetricSource): string => {
+    if (source === 'momo') {
+        if (metric === 'cpa') return 'momoCpa';
+        if (metric === 'cpc') return 'momoCpc';
+        if (metric === 'ctr') return 'momoCtr';
+        return 'momoCvr';
+    }
+    if (metric === 'cpa') return 'fbCpa';
+    if (metric === 'cpc') return 'fbCpc';
     if (metric === 'ctr') return 'fbCtr';
-    if (source === 'momo') return metric === 'cpa' ? 'momoCpa' : metric === 'cpc' ? 'momoCpc' : 'momoCvr';
-    return metric === 'cpa' ? 'fbCpa' : metric === 'cpc' ? 'fbCpc' : 'fbCvr';
+    return 'fbCvr';
 };
 
 const isPercentageMetric = (metric: EfficiencyMetricKey) => metric === 'cvr' || metric === 'ctr';
@@ -453,6 +459,7 @@ export const DataTable: React.FC<any> = (props) => {
     { field: 'spent', label: 'Spent', align: 'right' },
     { field: 'roas', label: 'ROAS', align: 'right' },
     { field: 'momoCpc', label: 'CPC', align: 'right' },
+    { field: 'momoCtr', label: 'CTR', align: 'right' },
     { field: 'momoCvr', label: 'CVR', align: 'right' },
     { field: 'momoCpa', label: 'CPA', align: 'right' },
   ];
@@ -480,7 +487,7 @@ export const DataTable: React.FC<any> = (props) => {
       if (value === undefined || value === null || isNaN(value)) return '-';
       if (field === 'spent') return formatNumber(value);
       if (['momoCpc', 'momoCpa', 'roas', 'cpm', 'fbCpc', 'fbCpa'].includes(field)) return formatDecimal(value);
-      if (['momoCvr', 'fbCtr', 'fbCvr'].includes(field)) return formatPercentage(value);
+      if (['momoCvr', 'momoCtr', 'fbCtr', 'fbCvr'].includes(field)) return formatPercentage(value);
       if (['fbPurchase', 'fbLinkClicks'].includes(field)) return formatNumber(value);
       return value;
   };
@@ -548,6 +555,11 @@ export const DataTable: React.FC<any> = (props) => {
 
 export const LoginScreen: React.FC<{ onCredential: (idToken: string) => void, error: string, clientId: string }> = ({ onCredential, error, clientId }) => {
     const buttonRef = useRef<HTMLDivElement>(null);
+    // Keep the latest callback in a ref instead of the effect's deps — onCredential is a
+    // fresh closure every App render (e.g. after a failed-login error), and re-running the
+    // effect would call renderButton again on the same node, stacking duplicate buttons.
+    const onCredentialRef = useRef(onCredential);
+    onCredentialRef.current = onCredential;
 
     useEffect(() => {
         let cancelled = false;
@@ -559,7 +571,7 @@ export const LoginScreen: React.FC<{ onCredential: (idToken: string) => void, er
             if (window.google?.accounts?.id && buttonRef.current) {
                 window.google.accounts.id.initialize({
                     client_id: clientId,
-                    callback: (response: { credential: string }) => onCredential(response.credential),
+                    callback: (response: { credential: string }) => onCredentialRef.current(response.credential),
                 });
                 window.google.accounts.id.renderButton(buttonRef.current, {
                     theme: 'outline', size: 'large', width: 300, text: 'signin_with',
@@ -571,7 +583,7 @@ export const LoginScreen: React.FC<{ onCredential: (idToken: string) => void, er
         tryInit();
 
         return () => { cancelled = true; };
-    }, [clientId, onCredential]);
+    }, [clientId]);
 
     return (
         <div className="min-h-screen flex items-center justify-center bg-slate-50 p-4">

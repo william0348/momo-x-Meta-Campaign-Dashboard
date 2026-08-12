@@ -66,10 +66,17 @@ export const fetchAuthorizedEmails = async (scriptUrl: string, sheetName: string
   const json = await response.json();
   if (json.status !== 'success' || !Array.isArray(json.data)) throw new Error(json.message || 'Failed to load authorized users.');
 
-  // Skip header row, drop blanks
-  return json.data.slice(1)
-    .map((row: any[]) => String(row[0] || '').trim().toLowerCase())
-    .filter((email: string) => email.length > 0);
+  const EMAIL_PATTERN = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+
+  // Skip header row, drop blanks. Also guards against reading the wrong sheet
+  // (e.g. before the Apps Script is redeployed with "Authorized Users" support) —
+  // without this, unrelated rows like campaign dates would be treated as emails
+  // and produce duplicate React keys in the Admin panel's list.
+  return Array.from(new Set(
+    json.data.slice(1)
+      .map((row: any[]) => String(row[0] || '').trim().toLowerCase())
+      .filter((email: string) => EMAIL_PATTERN.test(email))
+  ));
 };
 
 /**
@@ -107,8 +114,12 @@ const mapRowToCampaignData = (row: any[], index: number, headers: string[]): Cam
     const cpcIdx = findIndex(['流量成本', 'CPC']);
     const roasIdx = findIndex(['ROAS']);
     const cvrIdx = findIndex(['CVR']);
+    const ctrIdx = findIndex(['CTR']);
     const cpaIdx = findIndex(['CPA']);
-  
+    // Some exports (e.g. momo daily campaign sheets) have no direct CPA column,
+    // only average order value ("訂單價") — CPA can be reverse-derived from it and ROAS.
+    const orderValueIdx = findIndex(['訂單價']);
+
     // Facebook Metrics Indices
     const fbPurchaseIdx = findIndex(['FB Purchases', 'Purchases', 'fbPurchase']);
     const fbCpaIdx = findIndex(['FB CPA', 'fbCpa']);
@@ -129,7 +140,11 @@ const mapRowToCampaignData = (row: any[], index: number, headers: string[]): Cam
     const momoCpc = cpcIdx !== -1 ? parseNumber(row[cpcIdx]) : 0;
     const roas = roasIdx !== -1 ? parseNumber(row[roasIdx]) : 0;
     const momoCvr = cvrIdx !== -1 ? parsePercentage(row[cvrIdx]) : 0;
-    const momoCpa = cpaIdx !== -1 ? parseNumber(row[cpaIdx]) : 0;
+    const momoCtr = ctrIdx !== -1 ? parsePercentage(row[ctrIdx]) : undefined;
+    const orderValue = orderValueIdx !== -1 ? parseNumber(row[orderValueIdx]) : 0;
+    // Prefer a direct CPA column; otherwise derive it from order value / ROAS
+    // (orders = spent*ROAS/orderValue, so CPA = spent/orders = orderValue/ROAS).
+    const momoCpa = cpaIdx !== -1 ? parseNumber(row[cpaIdx]) : (roas > 0 ? orderValue / roas : 0);
     
     // Parse Facebook Data (if present in sheet)
     const fbPurchase = fbPurchaseIdx !== -1 ? parseNumber(row[fbPurchaseIdx]) : 0;
@@ -157,6 +172,7 @@ const mapRowToCampaignData = (row: any[], index: number, headers: string[]): Cam
       roas,
       momoCvr,
       momoCpa,
+      momoCtr,
       momoClicks,
       momoConversions,
       revenue,
@@ -206,23 +222,44 @@ export const readExcelFile = (file: File): Promise<CampaignData[]> => {
 
 export const mergeCampaignData = (existing: CampaignData[], incoming: CampaignData[]): CampaignData[] => {
   const map = new Map<string, CampaignData>();
-  
+
   // 1. Add all existing data to map
   existing.forEach(item => {
     const key = `${item.date}|${item.campaignName.trim()}`;
     map.set(key, item);
   });
 
-  // 2. Add incoming data ONLY if it doesn't already exist
-  // This prioritizes existing data and only appends strictly new records.
+  // 2. Merge incoming data in. Re-importing the same date/campaign refreshes momo
+  // metrics with the latest values, but keeps any previously-synced Facebook fields
+  // if this import provides no FB data at all (a plain momo Excel has no FB columns).
+  // Checked in aggregate (not per-field) so a genuine 0 from an actual FB re-sync
+  // isn't mistaken for "column absent" and overridden by stale nonzero data.
   incoming.forEach(item => {
     const key = `${item.date}|${item.campaignName.trim()}`;
-    if (!map.has(key)) {
-        map.set(key, item);
+    const prev = map.get(key);
+    if (!prev) {
+      map.set(key, item);
+      return;
     }
+    const incomingHasFbData = (item.fbLinkClicks || 0) > 0 || (item.fbPurchase || 0) > 0 ||
+      (item.impressions || 0) > 0 || (item.cpm || 0) > 0 || (item.fbCpc || 0) > 0 || (item.fbCtr || 0) > 0;
+    map.set(key, {
+      ...prev,
+      ...item,
+      ...(incomingHasFbData ? {} : {
+        fbPurchase: prev.fbPurchase,
+        fbCpa: prev.fbCpa,
+        fbCvr: prev.fbCvr,
+        fbCpc: prev.fbCpc,
+        fbCtr: prev.fbCtr,
+        cpm: prev.cpm,
+        fbLinkClicks: prev.fbLinkClicks,
+        impressions: prev.impressions,
+      }),
+    });
   });
 
-  return Array.from(map.values()).sort((a, b) => 
+  return Array.from(map.values()).sort((a, b) =>
     new Date(a.date).getTime() - new Date(b.date).getTime()
   );
 };
@@ -406,7 +443,7 @@ export const exportToCSV = (data: CampaignData[], filename: string) => {
 
   const headers = [
     'Date', 'Campaign Name', 'Spent', 'Revenue', 'ROAS',
-    'Momo Clicks', 'Momo Conversions', 'Momo CPC', 'Momo CPA', 'Momo CVR',
+    'Momo Clicks', 'Momo Conversions', 'Momo CPC', 'Momo CPA', 'Momo CVR', 'Momo CTR',
     'Impressions', 'FB Link Clicks', 'FB CPC', 'FB CTR', 'CPM', 'FB Purchases', 'FB CPA', 'FB CVR'
   ];
 
@@ -423,6 +460,7 @@ export const exportToCSV = (data: CampaignData[], filename: string) => {
     item.momoCpc,
     item.momoCpa,
     item.momoCvr,
+    item.momoCtr || 0,
     item.impressions || 0,
     item.fbLinkClicks || 0,
     item.fbCpc || 0,
