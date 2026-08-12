@@ -438,6 +438,22 @@ export const mergeFacebookData = (sheetData: CampaignData[], fbData: Partial<Cam
 
 // --- Export Helpers ---
 
+const escapeCsv = (value: any) => `"${String(value ?? '').replace(/"/g, '""')}"`;
+
+const downloadCSV = (headers: string[], rows: any[][], filename: string) => {
+  const csvContent = [headers.join(','), ...rows.map(r => r.join(','))].join('\r\n');
+  // Prepend BOM so Excel opens UTF-8 (Chinese campaign names) correctly
+  const blob = new Blob(['﻿' + csvContent], { type: 'text/csv;charset=utf-8;' });
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement('a');
+  link.href = url;
+  link.download = filename;
+  document.body.appendChild(link);
+  link.click();
+  document.body.removeChild(link);
+  URL.revokeObjectURL(url);
+};
+
 export const exportToCSV = (data: CampaignData[], filename: string) => {
   if (data.length === 0) return;
 
@@ -446,8 +462,6 @@ export const exportToCSV = (data: CampaignData[], filename: string) => {
     'Momo Clicks', 'Momo Conversions', 'Momo CPC', 'Momo CPA', 'Momo CVR', 'Momo CTR',
     'Impressions', 'FB Link Clicks', 'FB CPC', 'FB CTR', 'CPM', 'FB Purchases', 'FB CPA', 'FB CVR'
   ];
-
-  const escapeCsv = (value: any) => `"${String(value ?? '').replace(/"/g, '""')}"`;
 
   const rows = data.map(item => [
     item.date,
@@ -471,17 +485,40 @@ export const exportToCSV = (data: CampaignData[], filename: string) => {
     item.fbCvr || 0,
   ]);
 
-  const csvContent = [headers.join(','), ...rows.map(r => r.join(','))].join('\r\n');
-  // Prepend BOM so Excel opens UTF-8 (Chinese campaign names) correctly
-  const blob = new Blob(['﻿' + csvContent], { type: 'text/csv;charset=utf-8;' });
-  const url = URL.createObjectURL(blob);
-  const link = document.createElement('a');
-  link.href = url;
-  link.download = filename;
-  document.body.appendChild(link);
-  link.click();
-  document.body.removeChild(link);
-  URL.revokeObjectURL(url);
+  downloadCSV(headers, rows, filename);
+};
+
+// Exports the date-grouped, chart-ready data (used by MainChart/CostChart) with every metric,
+// so a chart's "download raw data" button reflects exactly what's plotted plus everything else.
+export const exportChartDataToCSV = (data: any[], filename: string) => {
+  if (data.length === 0) return;
+
+  const headers = [
+    'Date', 'Spent', 'Revenue', 'ROAS',
+    'Momo CPC', 'Momo CVR', 'Momo CPA', 'Momo CTR',
+    'Impressions', 'FB Link Clicks', 'FB CPC', 'FB CTR', 'CPM', 'FB Purchases', 'FB CPA', 'FB CVR'
+  ];
+
+  const rows = data.map(item => [
+    item.date,
+    item.spent || 0,
+    item.revenue || 0,
+    item.roas || 0,
+    item.momoCpc || 0,
+    item.momoCvr || 0,
+    item.momoCpa || 0,
+    item.momoCtr || 0,
+    item.impressions || 0,
+    item.fbLinkClicks || 0,
+    item.fbCpc || 0,
+    item.fbCtr || 0,
+    item.cpm || 0,
+    item.fbPurchase || 0,
+    item.fbCpa || 0,
+    item.fbCvr || 0,
+  ]);
+
+  downloadCSV(headers, rows, filename);
 };
 
 export const formatCurrency = (value: number) => {

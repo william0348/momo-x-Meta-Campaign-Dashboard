@@ -10,7 +10,7 @@ import {
   ResponsiveContainer, ComposedChart, Line, Bar, Area, XAxis, YAxis, CartesianGrid, Tooltip, Legend, Cell, LabelList
 } from 'recharts';
 import { CampaignData, DashboardMetrics, SortField, SortOrder, MetricSource } from '../types';
-import { formatNumber, formatDecimal, formatPercentage, formatCurrency } from '../utils';
+import { formatNumber, formatDecimal, formatPercentage, formatCurrency, exportChartDataToCSV } from '../utils';
 
 declare global {
   interface Window {
@@ -223,7 +223,13 @@ export const FilterBar: React.FC<any> = ({
 
 // --- Chart Card Wrapper: adds "expand" and "download PNG" actions to any chart ---
 
-const ChartCard: React.FC<{ title: string, headerExtra?: React.ReactNode, renderChart: (heightPx: number, showLabels: boolean) => React.ReactNode }> = ({ title, headerExtra, renderChart }) => {
+const ChartCard: React.FC<{
+    title: string,
+    headerExtra?: React.ReactNode,
+    data?: any[],
+    onDownloadRawData?: () => void,
+    renderChart: (heightPx: number, showLabels: boolean) => React.ReactNode
+}> = ({ title, headerExtra, data, onDownloadRawData, renderChart }) => {
     const [isExpanded, setIsExpanded] = useState(false);
     const [isDownloading, setIsDownloading] = useState(false);
     const [showLabels, setShowLabels] = useState(false);
@@ -262,6 +268,16 @@ const ChartCard: React.FC<{ title: string, headerExtra?: React.ReactNode, render
                         顯示數值標籤
                     </label>
                     <div className="flex items-center gap-1">
+                        {onDownloadRawData && (
+                            <button
+                                onClick={onDownloadRawData}
+                                disabled={!data || data.length === 0}
+                                title="Download raw data (CSV)"
+                                className="p-1.5 text-gray-400 hover:text-gray-700 hover:bg-gray-100 rounded-md transition-colors disabled:opacity-50"
+                            >
+                                <FileDown className="h-4 w-4" />
+                            </button>
+                        )}
                         <button
                             onClick={handleDownloadPng}
                             disabled={isDownloading}
@@ -315,6 +331,8 @@ export const MainChart: React.FC<{ data: any[], onDateClick: (d: string) => void
     return (
         <ChartCard
             title="Performance Trends"
+            data={data}
+            onDownloadRawData={() => exportChartDataToCSV(data, 'performance_trends_data.csv')}
             renderChart={(heightPx, showLabels) => (
                 <div style={{ height: heightPx }}>
                     <ResponsiveContainer width="100%" height="100%">
@@ -409,6 +427,8 @@ export const CostChart: React.FC<{ data: any[], onDateClick: (d: string) => void
     return (
         <ChartCard
             title="Efficiency Metrics"
+            data={data}
+            onDownloadRawData={() => exportChartDataToCSV(data, 'efficiency_metrics_data.csv')}
             headerExtra={
                 <div className="flex items-center gap-3">
                     <MetricSelect label="Area" value={leftMetric} onChange={setLeftMetric} />
