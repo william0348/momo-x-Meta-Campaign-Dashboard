@@ -1,15 +1,22 @@
 
-import React, { useState } from 'react';
-import { 
-  ArrowUpDown, ArrowUp, ArrowDown, Upload, Save, Search, X, 
-  Calendar, DollarSign, MousePointer, Eye, ShoppingCart, 
-  TrendingUp, Facebook, Lock, Fingerprint, RefreshCw, FileSpreadsheet, Loader2, LayoutDashboard
+import React, { useState, useRef, useEffect } from 'react';
+import {
+  ArrowUpDown, ArrowUp, ArrowDown, Upload, Save, Search, X,
+  Calendar, DollarSign, MousePointer, Eye, ShoppingCart,
+  TrendingUp, Facebook, Lock, RefreshCw, FileSpreadsheet, Loader2, LayoutDashboard,
+  Download, Maximize2, FileDown, ShieldCheck, LogOut, Trash2, Plus
 } from 'lucide-react';
-import { 
-  ResponsiveContainer, ComposedChart, Line, Bar, Area, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ReferenceLine, Cell
+import {
+  ResponsiveContainer, ComposedChart, Line, Bar, Area, XAxis, YAxis, CartesianGrid, Tooltip, Legend, Cell, LabelList
 } from 'recharts';
 import { CampaignData, DashboardMetrics, SortField, SortOrder, MetricSource } from '../types';
 import { formatNumber, formatDecimal, formatPercentage, formatCurrency } from '../utils';
+
+declare global {
+  interface Window {
+    google?: any;
+  }
+}
 
 // --- Components ---
 
@@ -62,6 +69,18 @@ export const DataUploadButton: React.FC<{ onUpload: (file: File) => void }> = ({
     </div>
   );
 };
+
+export const DownloadRawDataButton: React.FC<{ onClick: () => void, disabled?: boolean }> = ({ onClick, disabled }) => (
+  <button
+    onClick={onClick}
+    disabled={disabled}
+    title="Download filtered raw data as CSV"
+    className="flex items-center gap-2 px-3 py-2 bg-indigo-50 text-indigo-600 rounded-lg hover:bg-indigo-100 transition-colors disabled:opacity-50 text-sm font-medium"
+  >
+    <FileDown className="h-4 w-4" />
+    <span>Download Raw Data</span>
+  </button>
+);
 
 export const SaveToSheetButton: React.FC<{ onSave: () => void, isSaving: boolean }> = ({ onSave, isSaving }) => (
   <button 
@@ -202,89 +221,227 @@ export const FilterBar: React.FC<any> = ({
     );
 };
 
-export const MainChart: React.FC<{ data: any[], onDateClick: (d: string) => void, selectedDates: string[], source: MetricSource }> = ({ data, onDateClick, selectedDates, source }) => {
+// --- Chart Card Wrapper: adds "expand" and "download PNG" actions to any chart ---
+
+const ChartCard: React.FC<{ title: string, headerExtra?: React.ReactNode, renderChart: (heightPx: number, showLabels: boolean) => React.ReactNode }> = ({ title, headerExtra, renderChart }) => {
+    const [isExpanded, setIsExpanded] = useState(false);
+    const [isDownloading, setIsDownloading] = useState(false);
+    const [showLabels, setShowLabels] = useState(false);
+    const chartRef = useRef<HTMLDivElement>(null);
+
+    const handleDownloadPng = async () => {
+        if (!chartRef.current || isDownloading) return;
+        setIsDownloading(true);
+        try {
+            const { toPng } = await import('html-to-image');
+            const dataUrl = await toPng(chartRef.current, { backgroundColor: '#ffffff', pixelRatio: 2 });
+            const link = document.createElement('a');
+            link.download = `${title.replace(/\s+/g, '_')}.png`;
+            link.href = dataUrl;
+            link.click();
+        } catch (e) {
+            console.error('Failed to export chart as PNG', e);
+        } finally {
+            setIsDownloading(false);
+        }
+    };
+
     return (
         <div className="bg-white p-6 rounded-xl shadow-sm border border-gray-200">
-            <h3 className="text-lg font-semibold text-gray-900 mb-6">Performance Trends</h3>
-            <div className="h-80">
-                <ResponsiveContainer width="100%" height="100%">
-                    <ComposedChart data={data} onClick={(e) => e && e.activePayload && onDateClick(e.activePayload[0].payload.date)}>
-                        <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#f0f0f0" />
-                        <XAxis dataKey="date" tickFormatter={(d) => d.substring(5)} fontSize={12} tickMargin={10} axisLine={false} tickLine={false} />
-                        <YAxis yAxisId="left" orientation="left" stroke="#6b7280" fontSize={12} axisLine={false} tickLine={false} tickFormatter={(val) => `$${val}`} />
-                        <YAxis yAxisId="right" orientation="right" stroke="#6b7280" fontSize={12} axisLine={false} tickLine={false} />
-                        <Tooltip 
-                            contentStyle={{ backgroundColor: '#fff', borderRadius: '8px', border: '1px solid #e5e7eb', boxShadow: '0 4px 6px -1px rgba(0, 0, 0, 0.1)' }}
-                            labelStyle={{ color: '#374151', fontWeight: 600, marginBottom: '4px' }}
-                            formatter={(value: number, name: string) => [
-                                name === 'ROAS' ? formatDecimal(value) : 
-                                name.toLowerCase().includes('rate') || name === 'momoCvr' || name === 'fbCvr' || name === 'fbCtr' ? formatPercentage(value) :
-                                formatNumber(value), 
-                                name === 'spent' ? 'Spent' : name === 'revenue' ? 'Revenue' : name === 'fbPurchase' ? 'Purchases' : name
-                            ]}
+            <div className="flex items-center justify-between mb-6 flex-wrap gap-3">
+                <h3 className="text-lg font-semibold text-gray-900">{title}</h3>
+                <div className="flex items-center gap-3 flex-wrap">
+                    {headerExtra}
+                    <label className="flex items-center gap-1.5 text-xs font-medium text-gray-500 cursor-pointer select-none">
+                        <input
+                            type="checkbox"
+                            checked={showLabels}
+                            onChange={(e) => setShowLabels(e.target.checked)}
+                            className="h-3.5 w-3.5 rounded border-gray-300 text-blue-600 focus:ring-blue-500"
                         />
-                        <Legend wrapperStyle={{ paddingTop: '20px' }} />
-                        <ReferenceLine yAxisId="right" y={5} stroke="#e5e7eb" strokeDasharray="3 3" />
-                        <ReferenceLine yAxisId="right" y={10} stroke="#e5e7eb" strokeDasharray="3 3" />
-                        <ReferenceLine yAxisId="right" y={15} stroke="#e5e7eb" strokeDasharray="3 3" />
-                        
-                        <Bar yAxisId="left" dataKey="spent" name="Spent" fill="#3b82f6" radius={[4, 4, 0, 0]} maxBarSize={50}>
-                            {data.map((entry, index) => (
-                                <Cell key={`cell-${index}`} fillOpacity={selectedDates.length === 0 || selectedDates.includes(entry.date) ? 1 : 0.3} />
-                            ))}
-                        </Bar>
-                        {source === 'momo' ? (
-                            <Line yAxisId="right" type="monotone" dataKey="roas" name="ROAS" stroke="#10b981" strokeWidth={3} dot={false} />
-                        ) : (
-                            <Line yAxisId="right" type="monotone" dataKey="fbPurchase" name="Purchases" stroke="#10b981" strokeWidth={3} dot={false} />
-                        )}
-                    </ComposedChart>
-                </ResponsiveContainer>
+                        顯示數值標籤
+                    </label>
+                    <div className="flex items-center gap-1">
+                        <button
+                            onClick={handleDownloadPng}
+                            disabled={isDownloading}
+                            title="Download as PNG"
+                            className="p-1.5 text-gray-400 hover:text-gray-700 hover:bg-gray-100 rounded-md transition-colors disabled:opacity-50"
+                        >
+                            {isDownloading ? <Loader2 className="h-4 w-4 animate-spin" /> : <Download className="h-4 w-4" />}
+                        </button>
+                        <button
+                            onClick={() => setIsExpanded(true)}
+                            title="Expand chart"
+                            className="p-1.5 text-gray-400 hover:text-gray-700 hover:bg-gray-100 rounded-md transition-colors"
+                        >
+                            <Maximize2 className="h-4 w-4" />
+                        </button>
+                    </div>
+                </div>
             </div>
+            <div ref={chartRef} className="bg-white">
+                {renderChart(320, showLabels)}
+            </div>
+
+            {isExpanded && (
+                <div
+                    className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-6"
+                    onClick={() => setIsExpanded(false)}
+                >
+                    <div
+                        className="bg-white rounded-xl p-6 w-full max-w-5xl shadow-2xl"
+                        onClick={(e) => e.stopPropagation()}
+                    >
+                        <div className="flex items-center justify-between mb-6">
+                            <h3 className="text-lg font-semibold text-gray-900">{title}</h3>
+                            <button
+                                onClick={() => setIsExpanded(false)}
+                                title="Close"
+                                className="p-1.5 text-gray-400 hover:text-gray-700 hover:bg-gray-100 rounded-md transition-colors"
+                            >
+                                <X className="h-5 w-5" />
+                            </button>
+                        </div>
+                        {renderChart(512, showLabels)}
+                    </div>
+                </div>
+            )}
         </div>
     );
 };
 
-export const CostChart: React.FC<{ data: any[], onDateClick: (d: string) => void, selectedDates: string[], source: MetricSource }> = ({ data, onDateClick, selectedDates, source }) => {
+export const MainChart: React.FC<{ data: any[], onDateClick: (d: string) => void, selectedDates: string[], source: MetricSource }> = ({ data, onDateClick, selectedDates, source }) => {
     return (
-        <div className="bg-white p-6 rounded-xl shadow-sm border border-gray-200">
-            <h3 className="text-lg font-semibold text-gray-900 mb-6">Efficiency Metrics</h3>
-            <div className="h-80">
-                <ResponsiveContainer width="100%" height="100%">
-                    <ComposedChart data={data} onClick={(e) => e && e.activePayload && onDateClick(e.activePayload[0].payload.date)}>
-                        <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#f0f0f0" />
-                        <XAxis dataKey="date" tickFormatter={(d) => d.substring(5)} fontSize={12} tickMargin={10} axisLine={false} tickLine={false} />
-                        <YAxis yAxisId="left" orientation="left" stroke="#6b7280" fontSize={12} axisLine={false} tickLine={false} tickFormatter={(val) => `$${val}`} />
-                        <YAxis yAxisId="right" orientation="right" stroke="#6b7280" fontSize={12} axisLine={false} tickLine={false} />
-                        <Tooltip 
-                            contentStyle={{ backgroundColor: '#fff', borderRadius: '8px', border: '1px solid #e5e7eb', boxShadow: '0 4px 6px -1px rgba(0, 0, 0, 0.1)' }}
-                            formatter={(value: number, name: string) => [
-                                name === 'CPA' || name === 'CPC' ? formatDecimal(value) : formatPercentage(value),
-                                name
-                            ]}
-                        />
-                        <Legend wrapperStyle={{ paddingTop: '20px' }} />
-                        <defs>
-                            <linearGradient id="colorCpa" x1="0" y1="0" x2="0" y2="1">
-                                <stop offset="5%" stopColor="#f97316" stopOpacity={0.1}/>
-                                <stop offset="95%" stopColor="#f97316" stopOpacity={0}/>
-                            </linearGradient>
-                        </defs>
-                        {source === 'momo' ? (
-                           <>
-                             <Area yAxisId="left" type="monotone" dataKey="momoCpa" name="CPA" stroke="#f97316" fillOpacity={1} fill="url(#colorCpa)" strokeWidth={2} />
-                             <Line yAxisId="right" type="monotone" dataKey="momoCpc" name="CPC" stroke="#8b5cf6" strokeWidth={2} dot={true} />
-                           </>
-                        ) : (
-                           <>
-                             <Area yAxisId="left" type="monotone" dataKey="fbCpa" name="CPA" stroke="#f97316" fillOpacity={1} fill="url(#colorCpa)" strokeWidth={2} />
-                             <Line yAxisId="right" type="monotone" dataKey="fbCpc" name="CPC" stroke="#8b5cf6" strokeWidth={2} dot={true} />
-                           </>
-                        )}
-                    </ComposedChart>
-                </ResponsiveContainer>
-            </div>
-        </div>
+        <ChartCard
+            title="Performance Trends"
+            renderChart={(heightPx, showLabels) => (
+                <div style={{ height: heightPx }}>
+                    <ResponsiveContainer width="100%" height="100%">
+                        <ComposedChart data={data} onClick={(e) => e && e.activePayload && onDateClick(e.activePayload[0].payload.date)}>
+                            <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#f0f0f0" />
+                            <XAxis dataKey="date" tickFormatter={(d) => d.substring(5)} fontSize={12} tickMargin={10} axisLine={false} tickLine={false} />
+                            <YAxis yAxisId="left" orientation="left" stroke="#6b7280" fontSize={12} axisLine={false} tickLine={false} tickFormatter={(val) => `$${val}`} />
+                            <YAxis yAxisId="right" orientation="right" stroke="#6b7280" fontSize={12} axisLine={false} tickLine={false} />
+                            <Tooltip
+                                contentStyle={{ backgroundColor: '#fff', borderRadius: '8px', border: '1px solid #e5e7eb', boxShadow: '0 4px 6px -1px rgba(0, 0, 0, 0.1)' }}
+                                labelStyle={{ color: '#374151', fontWeight: 600, marginBottom: '4px' }}
+                                formatter={(value: number, name: string) => [
+                                    name === 'ROAS' ? formatDecimal(value) :
+                                    name.toLowerCase().includes('rate') || name === 'momoCvr' || name === 'fbCvr' || name === 'fbCtr' ? formatPercentage(value) :
+                                    formatNumber(value),
+                                    name === 'spent' ? 'Spent' : name === 'revenue' ? 'Revenue' : name === 'fbPurchase' ? 'Purchases' : name
+                                ]}
+                            />
+                            <Legend wrapperStyle={{ paddingTop: '20px' }} />
+
+                            <Bar yAxisId="left" dataKey="spent" name="Spent" fill="#3b82f6" radius={[4, 4, 0, 0]} maxBarSize={50}>
+                                {data.map((entry, index) => (
+                                    <Cell key={`cell-${index}`} fillOpacity={selectedDates.length === 0 || selectedDates.includes(entry.date) ? 1 : 0.3} />
+                                ))}
+                                {showLabels && <LabelList dataKey="spent" position="top" formatter={(v: number) => formatNumber(v)} fontSize={10} fill="#1d4ed8" />}
+                            </Bar>
+                            {source === 'momo' ? (
+                                <Line yAxisId="right" type="monotone" dataKey="roas" name="ROAS" stroke="#10b981" strokeWidth={3} dot={false}>
+                                    {showLabels && <LabelList dataKey="roas" position="top" formatter={(v: number) => formatDecimal(v)} fontSize={10} fill="#047857" />}
+                                </Line>
+                            ) : (
+                                <Line yAxisId="right" type="monotone" dataKey="fbPurchase" name="Purchases" stroke="#10b981" strokeWidth={3} dot={false}>
+                                    {showLabels && <LabelList dataKey="fbPurchase" position="top" formatter={(v: number) => formatNumber(v)} fontSize={10} fill="#047857" />}
+                                </Line>
+                            )}
+                        </ComposedChart>
+                    </ResponsiveContainer>
+                </div>
+            )}
+        />
+    );
+};
+
+type EfficiencyMetricKey = 'cpa' | 'cpc' | 'cvr' | 'ctr';
+
+const EFFICIENCY_METRIC_LABELS: Record<EfficiencyMetricKey, string> = {
+    cpa: 'CPA',
+    cpc: 'CPC',
+    cvr: 'CVR',
+    ctr: 'CTR',
+};
+
+// Resolve a metric key to the actual field name on chartData, given the current Momo/FB source.
+// CTR is always sourced from Facebook impression data since Momo has no equivalent metric.
+const resolveEfficiencyField = (metric: EfficiencyMetricKey, source: MetricSource): string => {
+    if (metric === 'ctr') return 'fbCtr';
+    if (source === 'momo') return metric === 'cpa' ? 'momoCpa' : metric === 'cpc' ? 'momoCpc' : 'momoCvr';
+    return metric === 'cpa' ? 'fbCpa' : metric === 'cpc' ? 'fbCpc' : 'fbCvr';
+};
+
+const isPercentageMetric = (metric: EfficiencyMetricKey) => metric === 'cvr' || metric === 'ctr';
+
+const MetricSelect: React.FC<{ label: string, value: EfficiencyMetricKey, onChange: (v: EfficiencyMetricKey) => void }> = ({ label, value, onChange }) => (
+    <label className="flex items-center gap-1.5 text-xs font-medium text-gray-500">
+        {label}
+        <select
+            value={value}
+            onChange={(e) => onChange(e.target.value as EfficiencyMetricKey)}
+            className="border border-gray-200 rounded-md text-xs px-2 py-1 text-gray-700 focus:ring-2 focus:ring-blue-500 outline-none"
+        >
+            {(Object.keys(EFFICIENCY_METRIC_LABELS) as EfficiencyMetricKey[]).map(key => (
+                <option key={key} value={key}>{EFFICIENCY_METRIC_LABELS[key]}</option>
+            ))}
+        </select>
+    </label>
+);
+
+export const CostChart: React.FC<{ data: any[], onDateClick: (d: string) => void, selectedDates: string[], source: MetricSource }> = ({ data, onDateClick, selectedDates, source }) => {
+    const [leftMetric, setLeftMetric] = useState<EfficiencyMetricKey>('cpc');
+    const [rightMetric, setRightMetric] = useState<EfficiencyMetricKey>('ctr');
+
+    const leftField = resolveEfficiencyField(leftMetric, source);
+    const rightField = resolveEfficiencyField(rightMetric, source);
+    const formatValue = (metric: EfficiencyMetricKey, value: number) => isPercentageMetric(metric) ? formatPercentage(value) : formatDecimal(value);
+
+    return (
+        <ChartCard
+            title="Efficiency Metrics"
+            headerExtra={
+                <div className="flex items-center gap-3">
+                    <MetricSelect label="Area" value={leftMetric} onChange={setLeftMetric} />
+                    <MetricSelect label="Line" value={rightMetric} onChange={setRightMetric} />
+                </div>
+            }
+            renderChart={(heightPx, showLabels) => (
+                <div style={{ height: heightPx }}>
+                    <ResponsiveContainer width="100%" height="100%">
+                        <ComposedChart data={data} onClick={(e) => e && e.activePayload && onDateClick(e.activePayload[0].payload.date)}>
+                            <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#f0f0f0" />
+                            <XAxis dataKey="date" tickFormatter={(d) => d.substring(5)} fontSize={12} tickMargin={10} axisLine={false} tickLine={false} />
+                            <YAxis yAxisId="left" orientation="left" stroke="#6b7280" fontSize={12} axisLine={false} tickLine={false} />
+                            <YAxis yAxisId="right" orientation="right" stroke="#6b7280" fontSize={12} axisLine={false} tickLine={false} />
+                            <Tooltip
+                                contentStyle={{ backgroundColor: '#fff', borderRadius: '8px', border: '1px solid #e5e7eb', boxShadow: '0 4px 6px -1px rgba(0, 0, 0, 0.1)' }}
+                                formatter={(value: number, name: string) => [
+                                    name === EFFICIENCY_METRIC_LABELS[leftMetric] ? formatValue(leftMetric, value) : formatValue(rightMetric, value),
+                                    name
+                                ]}
+                            />
+                            <Legend wrapperStyle={{ paddingTop: '20px' }} />
+                            <defs>
+                                <linearGradient id="colorLeftMetric" x1="0" y1="0" x2="0" y2="1">
+                                    <stop offset="5%" stopColor="#f97316" stopOpacity={0.1}/>
+                                    <stop offset="95%" stopColor="#f97316" stopOpacity={0}/>
+                                </linearGradient>
+                            </defs>
+                            <Area yAxisId="left" type="monotone" dataKey={leftField} name={EFFICIENCY_METRIC_LABELS[leftMetric]} stroke="#f97316" fillOpacity={1} fill="url(#colorLeftMetric)" strokeWidth={2}>
+                                {showLabels && <LabelList dataKey={leftField} position="top" formatter={(v: number) => formatValue(leftMetric, v)} fontSize={10} fill="#c2410c" />}
+                            </Area>
+                            <Line yAxisId="right" type="monotone" dataKey={rightField} name={EFFICIENCY_METRIC_LABELS[rightMetric]} stroke="#8b5cf6" strokeWidth={2} dot={true}>
+                                {showLabels && <LabelList dataKey={rightField} position="bottom" formatter={(v: number) => formatValue(rightMetric, v)} fontSize={10} fill="#6d28d9" />}
+                            </Line>
+                        </ComposedChart>
+                    </ResponsiveContainer>
+                </div>
+            )}
+        />
     );
 };
 
@@ -389,9 +546,33 @@ export const DataTable: React.FC<any> = (props) => {
   );
 };
 
-export const LoginScreen: React.FC<{ onLogin: (e: string, c: string) => void, onBiometricLogin: () => void, error: string }> = ({ onLogin, onBiometricLogin, error }) => {
-    const [email, setEmail] = useState('');
-    const [code, setCode] = useState('');
+export const LoginScreen: React.FC<{ onCredential: (idToken: string) => void, error: string, clientId: string }> = ({ onCredential, error, clientId }) => {
+    const buttonRef = useRef<HTMLDivElement>(null);
+
+    useEffect(() => {
+        let cancelled = false;
+        let attempts = 0;
+
+        // The GSI script (loaded in index.html) may not be ready yet on first mount — poll briefly.
+        const tryInit = () => {
+            if (cancelled) return;
+            if (window.google?.accounts?.id && buttonRef.current) {
+                window.google.accounts.id.initialize({
+                    client_id: clientId,
+                    callback: (response: { credential: string }) => onCredential(response.credential),
+                });
+                window.google.accounts.id.renderButton(buttonRef.current, {
+                    theme: 'outline', size: 'large', width: 300, text: 'signin_with',
+                });
+                return;
+            }
+            if (attempts++ < 40) setTimeout(tryInit, 250);
+        };
+        tryInit();
+
+        return () => { cancelled = true; };
+    }, [clientId, onCredential]);
+
     return (
         <div className="min-h-screen flex items-center justify-center bg-slate-50 p-4">
             <div className="bg-white p-8 rounded-2xl shadow-lg border border-gray-100 max-w-md w-full">
@@ -399,29 +580,119 @@ export const LoginScreen: React.FC<{ onLogin: (e: string, c: string) => void, on
                     <div className="bg-blue-600 w-12 h-12 rounded-xl flex items-center justify-center mx-auto mb-4">
                         <Lock className="text-white h-6 w-6" />
                     </div>
-                    <h1 className="text-2xl font-bold text-gray-900">Dashboard Login</h1>
-                    <p className="text-gray-500 mt-2">Enter your credentials to access metrics</p>
+                    <h1 className="text-2xl font-bold text-gray-900">Meta x momo Dashboard</h1>
+                    <p className="text-gray-500 mt-2">請使用已授權的 Google 帳號登入</p>
                 </div>
-                {error && <div className="bg-red-50 text-red-600 p-3 rounded-lg text-sm mb-6 flex items-center gap-2"><X className="h-4 w-4" />{error}</div>}
-                <div className="space-y-4">
-                    <div>
-                        <label className="block text-sm font-medium text-gray-700 mb-1">Email Address</label>
-                        <input type="email" value={email} onChange={e => setEmail(e.target.value)} className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 outline-none transition-all" placeholder="name@company.com" />
-                    </div>
-                    <div>
-                        <label className="block text-sm font-medium text-gray-700 mb-1">Access Code</label>
-                        <input type="password" value={code} onChange={e => setCode(e.target.value)} className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 outline-none transition-all" placeholder="••••••••" />
-                    </div>
-                    <button onClick={() => onLogin(email, code)} className="w-full bg-blue-600 hover:bg-blue-700 text-white font-semibold py-2.5 rounded-lg transition-all shadow-md hover:shadow-lg">
-                        Sign In
+                {error && <div className="bg-red-50 text-red-600 p-3 rounded-lg text-sm mb-6 flex items-center gap-2"><X className="h-4 w-4 flex-shrink-0" />{error}</div>}
+                <div className="flex justify-center" ref={buttonRef}></div>
+            </div>
+        </div>
+    );
+};
+
+export const AdminButton: React.FC<{ onClick: () => void }> = ({ onClick }) => (
+    <button
+        onClick={onClick}
+        title="Manage authorized accounts"
+        className="flex items-center gap-2 px-3 py-2 bg-gray-100 text-gray-700 rounded-lg hover:bg-gray-200 transition-colors text-sm font-medium"
+    >
+        <ShieldCheck className="h-4 w-4" />
+        <span>Admin</span>
+    </button>
+);
+
+export const LogoutButton: React.FC<{ email: string, onClick: () => void }> = ({ email, onClick }) => (
+    <button
+        onClick={onClick}
+        title={`Sign out (${email})`}
+        className="flex items-center gap-2 px-3 py-2 text-gray-500 rounded-lg hover:bg-gray-100 hover:text-gray-700 transition-colors text-sm font-medium"
+    >
+        <LogOut className="h-4 w-4" />
+        <span className="max-w-[140px] truncate">{email}</span>
+    </button>
+);
+
+export const AdminPanel: React.FC<{
+    emails: string[],
+    adminEmail: string,
+    isSaving: boolean,
+    onSave: (emails: string[]) => void,
+    onClose: () => void,
+}> = ({ emails, adminEmail, isSaving, onSave, onClose }) => {
+    const [localEmails, setLocalEmails] = useState<string[]>(emails);
+    const [newEmail, setNewEmail] = useState('');
+
+    const handleAdd = () => {
+        const normalized = newEmail.trim().toLowerCase();
+        if (!normalized) return;
+        if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(normalized)) return;
+        if (localEmails.includes(normalized)) { setNewEmail(''); return; }
+        setLocalEmails(prev => [...prev, normalized]);
+        setNewEmail('');
+    };
+
+    const handleRemove = (email: string) => {
+        if (email === adminEmail.toLowerCase()) return;
+        setLocalEmails(prev => prev.filter(e => e !== email));
+    };
+
+    return (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-6" onClick={onClose}>
+            <div className="bg-white rounded-xl p-6 w-full max-w-md shadow-2xl" onClick={(e) => e.stopPropagation()}>
+                <div className="flex items-center justify-between mb-4">
+                    <h3 className="text-lg font-semibold text-gray-900 flex items-center gap-2">
+                        <ShieldCheck className="h-5 w-5 text-blue-600" />
+                        Authorized Accounts
+                    </h3>
+                    <button onClick={onClose} className="p-1.5 text-gray-400 hover:text-gray-700 hover:bg-gray-100 rounded-md transition-colors">
+                        <X className="h-5 w-5" />
                     </button>
-                    <div className="relative my-6">
-                        <div className="absolute inset-0 flex items-center"><div className="w-full border-t border-gray-200"></div></div>
-                        <div className="relative flex justify-center text-sm"><span className="px-2 bg-white text-gray-500">Or continue with</span></div>
-                    </div>
-                    <button onClick={onBiometricLogin} className="w-full bg-white border border-gray-300 hover:bg-gray-50 text-gray-700 font-medium py-2.5 rounded-lg transition-all flex items-center justify-center gap-2">
-                        <Fingerprint className="h-5 w-5" />
-                        <span>Sign In with Touch ID</span>
+                </div>
+
+                <div className="flex gap-2 mb-4">
+                    <input
+                        type="email"
+                        value={newEmail}
+                        onChange={(e) => setNewEmail(e.target.value)}
+                        onKeyDown={(e) => e.key === 'Enter' && handleAdd()}
+                        placeholder="name@gmail.com"
+                        className="flex-1 px-3 py-2 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-blue-500 outline-none"
+                    />
+                    <button onClick={handleAdd} className="px-3 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-lg transition-colors">
+                        <Plus className="h-4 w-4" />
+                    </button>
+                </div>
+
+                <div className="space-y-1.5 max-h-64 overflow-y-auto mb-6">
+                    {localEmails.length === 0 && <p className="text-sm text-gray-400 text-center py-4">No authorized accounts yet.</p>}
+                    {localEmails.map(email => {
+                        const isAdmin = email === adminEmail.toLowerCase();
+                        return (
+                            <div key={email} className="flex items-center justify-between px-3 py-2 bg-gray-50 rounded-lg text-sm">
+                                <span className="text-gray-700 truncate">{email}</span>
+                                {isAdmin ? (
+                                    <span className="text-xs font-medium text-blue-600 bg-blue-50 px-2 py-0.5 rounded-full flex-shrink-0">Admin</span>
+                                ) : (
+                                    <button onClick={() => handleRemove(email)} className="text-gray-400 hover:text-red-600 flex-shrink-0">
+                                        <Trash2 className="h-4 w-4" />
+                                    </button>
+                                )}
+                            </div>
+                        );
+                    })}
+                </div>
+
+                <div className="flex gap-2">
+                    <button onClick={onClose} className="flex-1 py-2 border border-gray-300 rounded-lg text-sm font-medium text-gray-700 hover:bg-gray-50 transition-colors">
+                        Cancel
+                    </button>
+                    <button
+                        onClick={() => onSave(localEmails)}
+                        disabled={isSaving}
+                        className="flex-1 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-lg text-sm font-medium transition-colors disabled:opacity-50 flex items-center justify-center gap-2"
+                    >
+                        {isSaving ? <Loader2 className="h-4 w-4 animate-spin" /> : <Save className="h-4 w-4" />}
+                        Save
                     </button>
                 </div>
             </div>

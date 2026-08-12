@@ -18,6 +18,8 @@
 // Configuration
 // CRITICAL: This must match the sheet name used in App.tsx (executeSaveToSheet)
 var SHEET_NAME = "Dashboard Data";
+// Sheet used to persist the list of Gmail accounts allowed to log in (managed via Admin panel)
+var AUTHORIZED_USERS_SHEET = "Authorized Users";
 
 /**
  * Handle GET requests - Read data from Sheet
@@ -28,10 +30,11 @@ function doGet(e) {
 
   try {
     var ss = SpreadsheetApp.getActiveSpreadsheet();
-    var sheet = ss.getSheetByName(SHEET_NAME);
+    var requestedSheetName = (e.parameter && e.parameter.sheet) || SHEET_NAME;
+    var sheet = ss.getSheetByName(requestedSheetName);
 
     // If sheet doesn't exist, try to find "Data" as fallback, or return empty
-    if (!sheet) {
+    if (!sheet && requestedSheetName === SHEET_NAME) {
       sheet = ss.getSheetByName("Data");
     }
 

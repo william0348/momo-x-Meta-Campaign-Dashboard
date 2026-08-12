@@ -36,107 +36,57 @@ const normalizeDate = (dateInput: string | number | Date): string => {
   return date.toISOString().split('T')[0];
 };
 
-// --- WebAuthn / Passkey Helpers ---
+// --- Google Sign-In Helpers ---
 
 /**
- * Registers a new Passkey (Touch ID) for the current user.
+ * Verifies a Google Identity Services ID token against Google's tokeninfo endpoint.
+ * This runs entirely client-side (no backend), so it confirms the token's signature,
+ * expiry and audience are valid, and returns the verified email — good enough gating
+ * for an internal tool, but not a substitute for server-side session verification.
  */
-export const createPasskey = async (email: string): Promise<string | null> => {
-  if (!window.PublicKeyCredential) {
-    // Silently return null if not supported
-    return null;
-  }
+export const verifyGoogleIdToken = async (idToken: string, expectedClientId: string): Promise<{ email: string, emailVerified: boolean } | null> => {
+  const response = await fetch(`https://oauth2.googleapis.com/tokeninfo?id_token=${encodeURIComponent(idToken)}`);
+  if (!response.ok) return null;
 
-  // Check for iframe restrictions before attempting
-  if (window.self !== window.top) {
-      console.warn("Passkeys are likely disabled in this iframe context.");
-      return null;
-  }
+  const payload = await response.json();
+  if (payload.aud !== expectedClientId) return null;
+  if (!payload.email) return null;
 
-  // Random challenge (Mock)
-  const challenge = new Uint8Array(32);
-  window.crypto.getRandomValues(challenge);
-
-  // User ID based on email
-  const userId = new Uint8Array(email.length);
-  for (let i = 0; i < email.length; i++) userId[i] = email.charCodeAt(i);
-
-  const publicKey: PublicKeyCredentialCreationOptions = {
-    challenge,
-    rp: {
-      name: "Meta x momo Dashboard",
-      id: window.location.hostname, 
-    },
-    user: {
-      id: userId,
-      name: email,
-      displayName: email,
-    },
-    pubKeyCredParams: [
-      { alg: -7, type: "public-key" }, // ES256
-      { alg: -257, type: "public-key" }, // RS256
-    ],
-    authenticatorSelection: {
-      authenticatorAttachment: "platform", 
-      userVerification: "required",
-    },
-    timeout: 60000,
-    attestation: "none",
-  };
-
-  try {
-    const credential = await navigator.credentials.create({ publicKey }) as PublicKeyCredential;
-    if (credential) {
-      return credential.id; 
-    }
-  } catch (e: any) {
-    if (e.name === 'NotAllowedError' || 
-        e.message.includes('Permissions Policy') || 
-        e.message.includes('feature is not enabled')) {
-        console.warn("Passkey creation blocked by browser policy (likely running in iframe).");
-        return null;
-    }
-    console.error("WebAuthn Create Error:", e);
-    throw e;
-  }
-  return null;
+  return { email: String(payload.email).toLowerCase(), emailVerified: payload.email_verified === 'true' || payload.email_verified === true };
 };
 
 /**
- * Authenticates using an existing Passkey.
+ * Fetches the list of Gmail accounts authorized to view the dashboard from the
+ * "Authorized Users" Google Sheet tab (managed via the Admin panel).
  */
-export const getPasskey = async (): Promise<string | null> => {
-  if (!window.PublicKeyCredential) return null;
-  
-  if (window.self !== window.top) {
-      console.warn("Passkeys are likely disabled in this iframe context.");
-      return null;
-  }
+export const fetchAuthorizedEmails = async (scriptUrl: string, sheetName: string): Promise<string[]> => {
+  const response = await fetch(`${scriptUrl}?sheet=${encodeURIComponent(sheetName)}`);
+  if (!response.ok) throw new Error(`HTTP error! status: ${response.status}`);
 
-  const challenge = new Uint8Array(32);
-  window.crypto.getRandomValues(challenge);
+  const json = await response.json();
+  if (json.status !== 'success' || !Array.isArray(json.data)) throw new Error(json.message || 'Failed to load authorized users.');
 
-  const publicKey: PublicKeyCredentialRequestOptions = {
-    challenge,
-    rpId: window.location.hostname,
-    userVerification: "required",
-    timeout: 60000,
-  };
+  // Skip header row, drop blanks
+  return json.data.slice(1)
+    .map((row: any[]) => String(row[0] || '').trim().toLowerCase())
+    .filter((email: string) => email.length > 0);
+};
 
-  try {
-    const assertion = await navigator.credentials.get({ publicKey }) as PublicKeyCredential;
-    if (assertion) {
-      return assertion.id;
-    }
-  } catch (e: any) {
-    if (e.name === 'NotAllowedError' || 
-        e.message.includes('Permissions Policy') || 
-        e.message.includes('feature is not enabled')) {
-        return null; 
-    }
-    console.error("WebAuthn Get Error:", e);
-  }
-  return null;
+/**
+ * Overwrites the "Authorized Users" sheet tab with the given email list.
+ */
+export const saveAuthorizedEmails = async (scriptUrl: string, sheetName: string, emails: string[]): Promise<void> => {
+  const response = await fetch(scriptUrl, {
+    method: 'POST',
+    mode: 'cors',
+    body: JSON.stringify({
+      sheetTitle: sheetName,
+      values: [['Email'], ...emails.map(email => [email])],
+    }),
+  });
+
+  const result = await response.json();
+  if (result.status !== 'success') throw new Error(result.message);
 };
 
 const mapRowToCampaignData = (row: any[], index: number, headers: string[]): CampaignData | null => {
@@ -448,6 +398,53 @@ export const mergeFacebookData = (sheetData: CampaignData[], fbData: Partial<Cam
     }).sort((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime());
 };
 
+
+// --- Export Helpers ---
+
+export const exportToCSV = (data: CampaignData[], filename: string) => {
+  if (data.length === 0) return;
+
+  const headers = [
+    'Date', 'Campaign Name', 'Spent', 'Revenue', 'ROAS',
+    'Momo Clicks', 'Momo Conversions', 'Momo CPC', 'Momo CPA', 'Momo CVR',
+    'Impressions', 'FB Link Clicks', 'FB CPC', 'FB CTR', 'CPM', 'FB Purchases', 'FB CPA', 'FB CVR'
+  ];
+
+  const escapeCsv = (value: any) => `"${String(value ?? '').replace(/"/g, '""')}"`;
+
+  const rows = data.map(item => [
+    item.date,
+    escapeCsv(item.campaignName),
+    item.spent,
+    item.revenue,
+    item.roas,
+    item.momoClicks,
+    item.momoConversions,
+    item.momoCpc,
+    item.momoCpa,
+    item.momoCvr,
+    item.impressions || 0,
+    item.fbLinkClicks || 0,
+    item.fbCpc || 0,
+    item.fbCtr || 0,
+    item.cpm || 0,
+    item.fbPurchase || 0,
+    item.fbCpa || 0,
+    item.fbCvr || 0,
+  ]);
+
+  const csvContent = [headers.join(','), ...rows.map(r => r.join(','))].join('\r\n');
+  // Prepend BOM so Excel opens UTF-8 (Chinese campaign names) correctly
+  const blob = new Blob(['﻿' + csvContent], { type: 'text/csv;charset=utf-8;' });
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement('a');
+  link.href = url;
+  link.download = filename;
+  document.body.appendChild(link);
+  link.click();
+  document.body.removeChild(link);
+  URL.revokeObjectURL(url);
+};
 
 export const formatCurrency = (value: number) => {
   return new Intl.NumberFormat('en-US', {

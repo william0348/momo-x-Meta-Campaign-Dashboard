@@ -1,12 +1,13 @@
 
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { CampaignData, DashboardMetrics, SortField, SortOrder, MetricSource } from './types';
-import { GOOGLE_APPS_SCRIPT_URL, FACEBOOK_ACCESS_TOKEN, FACEBOOK_AD_ACCOUNT_ID } from './constants';
-import { readExcelFile, mergeCampaignData, parseSheetData, createPasskey, getPasskey, fetchFacebookInsights, mergeFacebookData } from './utils';
+import { GOOGLE_APPS_SCRIPT_URL, FACEBOOK_ACCESS_TOKEN, FACEBOOK_AD_ACCOUNT_ID, CLIENT_ID, ADMIN_EMAIL, AUTHORIZED_EMAILS as DEFAULT_AUTHORIZED_EMAILS, AUTHORIZED_USERS_SHEET } from './constants';
+import { readExcelFile, mergeCampaignData, parseSheetData, verifyGoogleIdToken, fetchAuthorizedEmails, saveAuthorizedEmails, fetchFacebookInsights, mergeFacebookData, exportToCSV } from './utils';
 import {
   SummaryCards,
   DataUploadButton,
   SaveToSheetButton,
+  DownloadRawDataButton,
   FilterBar,
   MainChart,
   CostChart,
@@ -14,15 +15,23 @@ import {
   LoginScreen,
   Toast,
   LoadFacebookDataButton,
-  MetricSourceToggle
+  MetricSourceToggle,
+  AdminButton,
+  LogoutButton,
+  AdminPanel
 } from './components/DashboardComponents';
-import { LayoutDashboard, Loader2, Fingerprint } from 'lucide-react';
+import { LayoutDashboard, Loader2 } from 'lucide-react';
 
 const App: React.FC = () => {
   // --- State: Auth ---
-  const [isAuthenticated, setIsAuthenticated] = useState(true);
+  const [isAuthenticated, setIsAuthenticated] = useState(false);
+  const [isCheckingAuth, setIsCheckingAuth] = useState(true);
   const [currentUserEmail, setCurrentUserEmail] = useState('');
   const [loginError, setLoginError] = useState('');
+  const [authorizedEmails, setAuthorizedEmails] = useState<string[]>(DEFAULT_AUTHORIZED_EMAILS);
+  const [isAdminPanelOpen, setIsAdminPanelOpen] = useState(false);
+  const [isSavingAuthorizedEmails, setIsSavingAuthorizedEmails] = useState(false);
+  const isAdmin = currentUserEmail.toLowerCase() === ADMIN_EMAIL.toLowerCase();
 
   // --- State: Data ---
   const [rawData, setRawData] = useState<CampaignData[]>([]);
@@ -47,17 +56,45 @@ const App: React.FC = () => {
   const [notification, setNotification] = useState<{message: string, type: 'success' | 'error'} | null>(null);
   
   // --- Initialization & Data Fetching ---
+  // Guards against React StrictMode's dev-only double-invoke of mount effects, which would
+  // otherwise fire two concurrent requests at the same Apps Script endpoint (it serializes
+  // GET requests behind a script-wide lock, so overlapping calls can time out one another).
+  const didInitAuthRef = useRef(false);
   useEffect(() => {
-    const storedAuth = localStorage.getItem('auth_email');
-    if (storedAuth) {
-      setIsAuthenticated(true);
-      setCurrentUserEmail(storedAuth);
-    }
+    if (didInitAuthRef.current) return;
+    didInitAuthRef.current = true;
+
+    (async () => {
+      let emails = DEFAULT_AUTHORIZED_EMAILS.map(e => e.toLowerCase());
+      try {
+        const fetched = await fetchAuthorizedEmails(GOOGLE_APPS_SCRIPT_URL, AUTHORIZED_USERS_SHEET);
+        if (fetched.length > 0) emails = fetched;
+      } catch (e) {
+        console.warn('Failed to load authorized users list, using default.', e);
+      }
+      // The admin is always authorized, even if the sheet is misconfigured or empty.
+      if (!emails.includes(ADMIN_EMAIL.toLowerCase())) emails = [...emails, ADMIN_EMAIL.toLowerCase()];
+      setAuthorizedEmails(emails);
+
+      const storedEmail = localStorage.getItem('auth_email');
+      if (storedEmail && emails.includes(storedEmail.toLowerCase())) {
+        setIsAuthenticated(true);
+        setCurrentUserEmail(storedEmail);
+      } else if (storedEmail) {
+        localStorage.removeItem('auth_email');
+      }
+      setIsCheckingAuth(false);
+    })();
   }, []);
 
+  const didFetchDataRef = useRef(false);
   useEffect(() => {
-    if (isAuthenticated) {
+    if (isAuthenticated && !didFetchDataRef.current) {
+      didFetchDataRef.current = true;
       fetchDataFromSheet();
+    }
+    if (!isAuthenticated) {
+      didFetchDataRef.current = false; // allow a future login to re-fetch
     }
   }, [isAuthenticated]);
 
@@ -236,23 +273,45 @@ const App: React.FC = () => {
   }, [aggregatedTableData, selectedCampaign]);
 
   // --- Handlers ---
-  const handleLogin = (email: string, code: string) => {
-    const isValidUser = ['williamlion@meta.com', 'emeraldyu@meta.com', 'justinting@meta.com'].includes(email.toLowerCase());
-    if (isValidUser && code === '106282393049504') {
+  const handleGoogleCredential = async (idToken: string) => {
+    try {
+      const result = await verifyGoogleIdToken(idToken, CLIENT_ID);
+      if (!result || !result.emailVerified) {
+        setLoginError('Google 帳號驗證失敗，請重新登入。');
+        return;
+      }
+      if (!authorizedEmails.includes(result.email)) {
+        setLoginError(`此帳號 (${result.email}) 未被授權存取本系統，請聯繫管理員。`);
+        return;
+      }
       setIsAuthenticated(true);
-      setCurrentUserEmail(email);
+      setCurrentUserEmail(result.email);
       setLoginError('');
-      localStorage.setItem('auth_email', email);
-    } else {
-      setLoginError('Invalid email or access code.');
+      localStorage.setItem('auth_email', result.email);
+    } catch (e) {
+      setLoginError('Google 登入時發生錯誤，請稍後再試。');
     }
   };
 
-  const handleBiometricLogin = async () => { 
-      const credId = await getPasskey();
-      if (credId) {
-          setIsAuthenticated(true);
-      }
+  const handleLogout = () => {
+    localStorage.removeItem('auth_email');
+    setIsAuthenticated(false);
+    setCurrentUserEmail('');
+  };
+
+  const handleSaveAuthorizedEmails = async (emails: string[]) => {
+    const normalized = Array.from(new Set([...emails.map(e => e.toLowerCase()), ADMIN_EMAIL.toLowerCase()]));
+    setIsSavingAuthorizedEmails(true);
+    try {
+      await saveAuthorizedEmails(GOOGLE_APPS_SCRIPT_URL, AUTHORIZED_USERS_SHEET, normalized);
+      setAuthorizedEmails(normalized);
+      setIsAdminPanelOpen(false);
+      setNotification({ message: 'Authorized accounts updated.', type: 'success' });
+    } catch (e: any) {
+      setNotification({ message: `Failed to save: ${e.message}`, type: 'error' });
+    } finally {
+      setIsSavingAuthorizedEmails(false);
+    }
   };
 
   const handleUpload = async (file: File) => {
@@ -382,11 +441,25 @@ const App: React.FC = () => {
     setEndDate(maxDate.toISOString().split('T')[0]);
   };
   
+  const handleDownloadRawData = () => {
+    const rangeLabel = startDate && endDate ? `${startDate}_to_${endDate}` : 'all';
+    exportToCSV(filteredData, `momo_campaign_raw_data_${rangeLabel}.csv`);
+  };
+
   const handleDateClick = (date: string) => setSelectedDates(p => p.includes(date) ? p.filter(d => d !== date) : [...p, date]);
   const toggleCampaignType = (type: string) => setSelectedCampaignTypes(p => p.includes(type) ? p.filter(t => t !== type) : [...p, type]);
 
+  if (isCheckingAuth) {
+    return (
+      <div className="min-h-screen flex flex-col items-center justify-center gap-3 text-gray-500 bg-slate-50">
+        <Loader2 className="h-8 w-8 animate-spin text-blue-500" />
+        <p>Checking access...</p>
+      </div>
+    );
+  }
+
   if (!isAuthenticated) {
-    return <LoginScreen onLogin={handleLogin} onBiometricLogin={handleBiometricLogin} error={loginError} />;
+    return <LoginScreen onCredential={handleGoogleCredential} error={loginError} clientId={CLIENT_ID} />;
   }
 
   return (
@@ -404,7 +477,11 @@ const App: React.FC = () => {
               {/* Manual refresh optional */}
               <LoadFacebookDataButton onClick={handleManualFbLoad} isLoading={isFetchingFbData} />
               <DataUploadButton onUpload={handleUpload} />
+              <DownloadRawDataButton onClick={handleDownloadRawData} disabled={filteredData.length === 0} />
               <SaveToSheetButton onSave={() => executeSaveToSheet()} isSaving={isSavingToSheet} />
+              <div className="h-6 w-px bg-gray-200 mx-1"></div>
+              {isAdmin && <AdminButton onClick={() => setIsAdminPanelOpen(true)} />}
+              <LogoutButton email={currentUserEmail} onClick={handleLogout} />
             </div>
           </div>
         </div>
@@ -441,6 +518,15 @@ const App: React.FC = () => {
         )}
       </main>
       {notification && <Toast message={notification.message} type={notification.type} onClose={() => setNotification(null)} />}
+      {isAdminPanelOpen && (
+        <AdminPanel
+          emails={authorizedEmails}
+          adminEmail={ADMIN_EMAIL}
+          isSaving={isSavingAuthorizedEmails}
+          onSave={handleSaveAuthorizedEmails}
+          onClose={() => setIsAdminPanelOpen(false)}
+        />
+      )}
     </div>
   );
 };
