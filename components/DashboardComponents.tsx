@@ -1,5 +1,5 @@
 
-import React, { useState, useRef, useEffect } from 'react';
+import React, { useState, useRef, useEffect, useTransition } from 'react';
 import {
   ArrowUpDown, ArrowUp, ArrowDown, Upload, Save, Search, X,
   Calendar, DollarSign, MousePointer, Eye, ShoppingCart,
@@ -9,8 +9,8 @@ import {
 import {
   ResponsiveContainer, ComposedChart, Line, Bar, Area, XAxis, YAxis, CartesianGrid, Tooltip, Legend, Cell, LabelList
 } from 'recharts';
-import { CampaignData, DashboardMetrics, SortField, SortOrder, MetricSource } from '../types';
-import { formatNumber, formatDecimal, formatPercentage, formatCurrency, exportChartDataToCSV } from '../utils';
+import { CampaignData, DashboardMetrics, SortField, SortOrder, MetricSource, ChartGranularity } from '../types';
+import { formatNumber, formatDecimal, formatPercentage, formatCurrency, exportChartDataToCSV, formatChartGroupLabel } from '../utils';
 
 declare global {
   interface Window {
@@ -34,6 +34,22 @@ export const MetricSourceToggle: React.FC<{ source: MetricSource, onSourceChange
     >
       Meta (FB)
     </button>
+  </div>
+);
+
+const GRANULARITY_LABELS: Record<ChartGranularity, string> = { day: '日', week: '週', month: '月' };
+
+export const GranularityToggle: React.FC<{ granularity: ChartGranularity, onGranularityChange: (g: ChartGranularity) => void }> = ({ granularity, onGranularityChange }) => (
+  <div className="flex bg-gray-100 p-1 rounded-lg border border-gray-200">
+    {(Object.keys(GRANULARITY_LABELS) as ChartGranularity[]).map(g => (
+      <button
+        key={g}
+        onClick={() => onGranularityChange(g)}
+        className={`px-4 py-1.5 text-sm font-medium rounded-md transition-all ${granularity === g ? 'bg-white shadow-sm text-blue-600' : 'text-gray-500 hover:text-gray-900'}`}
+      >
+        {GRANULARITY_LABELS[g]}
+      </button>
+    ))}
   </div>
 );
 
@@ -233,6 +249,10 @@ const ChartCard: React.FC<{
     const [isExpanded, setIsExpanded] = useState(false);
     const [isDownloading, setIsDownloading] = useState(false);
     const [showLabels, setShowLabels] = useState(false);
+    // Rendering LabelList across a long date range (hundreds of points x 2 series) is
+    // expensive enough to block the main thread; marking it a transition keeps the
+    // checkbox itself responsive instead of dropping clicks made during that repaint.
+    const [, startLabelTransition] = useTransition();
     const chartRef = useRef<HTMLDivElement>(null);
 
     const handleDownloadPng = async () => {
@@ -262,7 +282,10 @@ const ChartCard: React.FC<{
                         <input
                             type="checkbox"
                             checked={showLabels}
-                            onChange={(e) => setShowLabels(e.target.checked)}
+                            onChange={(e) => {
+                                const checked = e.target.checked;
+                                startLabelTransition(() => setShowLabels(checked));
+                            }}
                             className="h-3.5 w-3.5 rounded border-gray-300 text-blue-600 focus:ring-blue-500"
                         />
                         顯示數值標籤
@@ -327,7 +350,7 @@ const ChartCard: React.FC<{
     );
 };
 
-export const MainChart: React.FC<{ data: any[], onDateClick: (d: string) => void, selectedDates: string[], source: MetricSource }> = ({ data, onDateClick, selectedDates, source }) => {
+export const MainChart: React.FC<{ data: any[], onDateClick: (d: string) => void, selectedDates: string[], source: MetricSource, granularity: ChartGranularity }> = ({ data, onDateClick, selectedDates, source, granularity }) => {
     return (
         <ChartCard
             title="Performance Trends"
@@ -338,12 +361,13 @@ export const MainChart: React.FC<{ data: any[], onDateClick: (d: string) => void
                     <ResponsiveContainer width="100%" height="100%">
                         <ComposedChart data={data} onClick={(e) => e && e.activePayload && onDateClick(e.activePayload[0].payload.date)}>
                             <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#f0f0f0" />
-                            <XAxis dataKey="date" tickFormatter={(d) => d.substring(5)} fontSize={12} tickMargin={10} axisLine={false} tickLine={false} />
+                            <XAxis dataKey="date" tickFormatter={(d) => formatChartGroupLabel(d, granularity)} fontSize={12} tickMargin={10} axisLine={false} tickLine={false} />
                             <YAxis yAxisId="left" orientation="left" stroke="#6b7280" fontSize={12} axisLine={false} tickLine={false} tickFormatter={(val) => `$${val}`} />
                             <YAxis yAxisId="right" orientation="right" stroke="#6b7280" fontSize={12} axisLine={false} tickLine={false} />
                             <Tooltip
                                 contentStyle={{ backgroundColor: '#fff', borderRadius: '8px', border: '1px solid #e5e7eb', boxShadow: '0 4px 6px -1px rgba(0, 0, 0, 0.1)' }}
                                 labelStyle={{ color: '#374151', fontWeight: 600, marginBottom: '4px' }}
+                                labelFormatter={(d: string) => granularity === 'week' ? `Week of ${d}` : d}
                                 formatter={(value: number, name: string) => [
                                     name === 'ROAS' ? formatDecimal(value) :
                                     name.toLowerCase().includes('rate') || name === 'momoCvr' || name === 'fbCvr' || name === 'fbCtr' ? formatPercentage(value) :
@@ -416,7 +440,7 @@ const MetricSelect: React.FC<{ label: string, value: EfficiencyMetricKey, onChan
     </label>
 );
 
-export const CostChart: React.FC<{ data: any[], onDateClick: (d: string) => void, selectedDates: string[], source: MetricSource }> = ({ data, onDateClick, selectedDates, source }) => {
+export const CostChart: React.FC<{ data: any[], onDateClick: (d: string) => void, selectedDates: string[], source: MetricSource, granularity: ChartGranularity }> = ({ data, onDateClick, selectedDates, source, granularity }) => {
     const [leftMetric, setLeftMetric] = useState<EfficiencyMetricKey>('cpc');
     const [rightMetric, setRightMetric] = useState<EfficiencyMetricKey>('ctr');
 
@@ -440,11 +464,12 @@ export const CostChart: React.FC<{ data: any[], onDateClick: (d: string) => void
                     <ResponsiveContainer width="100%" height="100%">
                         <ComposedChart data={data} onClick={(e) => e && e.activePayload && onDateClick(e.activePayload[0].payload.date)}>
                             <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#f0f0f0" />
-                            <XAxis dataKey="date" tickFormatter={(d) => d.substring(5)} fontSize={12} tickMargin={10} axisLine={false} tickLine={false} />
+                            <XAxis dataKey="date" tickFormatter={(d) => formatChartGroupLabel(d, granularity)} fontSize={12} tickMargin={10} axisLine={false} tickLine={false} />
                             <YAxis yAxisId="left" orientation="left" stroke="#6b7280" fontSize={12} axisLine={false} tickLine={false} />
                             <YAxis yAxisId="right" orientation="right" stroke="#6b7280" fontSize={12} axisLine={false} tickLine={false} />
                             <Tooltip
                                 contentStyle={{ backgroundColor: '#fff', borderRadius: '8px', border: '1px solid #e5e7eb', boxShadow: '0 4px 6px -1px rgba(0, 0, 0, 0.1)' }}
+                                labelFormatter={(d: string) => granularity === 'week' ? `Week of ${d}` : d}
                                 formatter={(value: number, name: string) => [
                                     name === EFFICIENCY_METRIC_LABELS[leftMetric] ? formatValue(leftMetric, value) : formatValue(rightMetric, value),
                                     name

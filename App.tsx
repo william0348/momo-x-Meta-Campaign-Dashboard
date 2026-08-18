@@ -1,8 +1,8 @@
 
 import React, { useState, useEffect, useMemo, useRef } from 'react';
-import { CampaignData, DashboardMetrics, SortField, SortOrder, MetricSource } from './types';
+import { CampaignData, DashboardMetrics, SortField, SortOrder, MetricSource, ChartGranularity } from './types';
 import { GOOGLE_APPS_SCRIPT_URL, FACEBOOK_ACCESS_TOKEN, FACEBOOK_AD_ACCOUNT_ID, CLIENT_ID, ADMIN_EMAIL, AUTHORIZED_EMAILS as DEFAULT_AUTHORIZED_EMAILS, AUTHORIZED_USERS_SHEET } from './constants';
-import { readExcelFile, mergeCampaignData, parseSheetData, verifyGoogleIdToken, fetchAuthorizedEmails, saveAuthorizedEmails, fetchFacebookInsights, mergeFacebookData, exportToCSV } from './utils';
+import { readExcelFile, mergeCampaignData, parseSheetData, verifyGoogleIdToken, fetchAuthorizedEmails, saveAuthorizedEmails, fetchFacebookInsights, mergeFacebookData, exportToCSV, getChartGroupKey } from './utils';
 import {
   SummaryCards,
   DataUploadButton,
@@ -16,6 +16,7 @@ import {
   Toast,
   LoadFacebookDataButton,
   MetricSourceToggle,
+  GranularityToggle,
   AdminButton,
   LogoutButton,
   AdminPanel
@@ -46,6 +47,7 @@ const App: React.FC = () => {
   const [selectedCampaign, setSelectedCampaign] = useState<string | null>(null);
   const [selectedCampaignTypes, setSelectedCampaignTypes] = useState<string[]>([]);
   const [metricSource, setMetricSource] = useState<MetricSource>('momo');
+  const [chartGranularity, setChartGranularity] = useState<ChartGranularity>('day');
 
   // --- State: Sorting ---
   const [sortField, setSortField] = useState<SortField>('spent');
@@ -223,10 +225,11 @@ const App: React.FC = () => {
     const momoCtrValueByDate = new Map<string, number>();
     const momoCtrSpendByDate = new Map<string, number>();
     base.forEach(item => {
-      if (!map.has(item.date)) {
-        map.set(item.date, { date: item.date, spent: 0, revenue: 0, momoClicks: 0, momoConversions: 0, impressions: 0, fbLinkClicks: 0, fbPurchase: 0 });
+      const groupKey = getChartGroupKey(item.date, chartGranularity);
+      if (!map.has(groupKey)) {
+        map.set(groupKey, { date: groupKey, spent: 0, revenue: 0, momoClicks: 0, momoConversions: 0, impressions: 0, fbLinkClicks: 0, fbPurchase: 0 });
       }
-      const entry = map.get(item.date)!;
+      const entry = map.get(groupKey)!;
       entry.spent = (entry.spent || 0) + item.spent;
       entry.revenue = (entry.revenue || 0) + item.revenue;
       entry.momoClicks = (entry.momoClicks || 0) + item.momoClicks;
@@ -235,8 +238,8 @@ const App: React.FC = () => {
       entry.fbLinkClicks = (entry.fbLinkClicks || 0) + (item.fbLinkClicks || 0);
       entry.fbPurchase = (entry.fbPurchase || 0) + (item.fbPurchase || 0);
       if (item.momoCtr !== undefined) {
-        momoCtrValueByDate.set(item.date, (momoCtrValueByDate.get(item.date) || 0) + item.momoCtr * item.spent);
-        momoCtrSpendByDate.set(item.date, (momoCtrSpendByDate.get(item.date) || 0) + item.spent);
+        momoCtrValueByDate.set(groupKey, (momoCtrValueByDate.get(groupKey) || 0) + item.momoCtr * item.spent);
+        momoCtrSpendByDate.set(groupKey, (momoCtrSpendByDate.get(groupKey) || 0) + item.spent);
       }
     });
     return Array.from(map.entries()).sort((a, b) => a[0].localeCompare(b[0])).map(([date, d]) => ({
@@ -252,7 +255,7 @@ const App: React.FC = () => {
       fbCpa: d.fbPurchase! > 0 ? d.spent! / d.fbPurchase! : 0,
       fbCvr: d.fbLinkClicks! > 0 ? d.fbPurchase! / d.fbLinkClicks! : 0,
     }));
-  }, [filteredData, selectedCampaign]);
+  }, [filteredData, selectedCampaign, chartGranularity]);
 
   // --- Metrics for Summary Cards ---
   const metrics: DashboardMetrics = useMemo(() => {
@@ -518,9 +521,12 @@ const App: React.FC = () => {
               onClearDate={() => setSelectedDates([])} onClearCampaign={() => setSelectedCampaign(null)}
               onPresetChange={(val) => handlePresetChange(val, rawData)} selectedCampaignTypes={selectedCampaignTypes} onToggleCampaignType={toggleCampaignType}
             />
+            <div className="flex justify-end mb-3">
+              <GranularityToggle granularity={chartGranularity} onGranularityChange={setChartGranularity} />
+            </div>
             <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 mb-6">
-              <MainChart data={chartData} onDateClick={handleDateClick} selectedDates={selectedDates} source={metricSource} />
-              <CostChart data={chartData} onDateClick={handleDateClick} selectedDates={selectedDates} source={metricSource} />
+              <MainChart data={chartData} onDateClick={handleDateClick} selectedDates={selectedDates} source={metricSource} granularity={chartGranularity} />
+              <CostChart data={chartData} onDateClick={handleDateClick} selectedDates={selectedDates} source={metricSource} granularity={chartGranularity} />
             </div>
             <DataTable
               data={aggregatedTableData}

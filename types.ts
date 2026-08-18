@@ -49,3 +49,4 @@ export interface DashboardMetrics {
 export type SortField = keyof CampaignData | 'fbCpc' | 'fbCtr' | 'fbPurchase' | 'fbCpa' | 'fbCvr';
 export type SortOrder = 'asc' | 'desc';
 export type MetricSource = 'momo' | 'fb';
+export type ChartGranularity = 'day' | 'week' | 'month';

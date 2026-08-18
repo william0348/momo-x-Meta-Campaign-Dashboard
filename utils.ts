@@ -36,6 +36,35 @@ const normalizeDate = (dateInput: string | number | Date): string => {
   return date.toISOString().split('T')[0];
 };
 
+// --- Chart Granularity Helpers (day / week / month bucketing) ---
+
+// Monday of the ISO week containing this date, as YYYY-MM-DD
+export const getWeekStartDate = (dateStr: string): string => {
+  const d = new Date(`${dateStr}T00:00:00Z`);
+  const day = d.getUTCDay(); // 0 = Sunday .. 6 = Saturday
+  const diffToMonday = day === 0 ? -6 : 1 - day;
+  d.setUTCDate(d.getUTCDate() + diffToMonday);
+  return d.toISOString().split('T')[0];
+};
+
+export const getMonthKey = (dateStr: string): string => dateStr.slice(0, 7); // YYYY-MM
+
+export const getChartGroupKey = (dateStr: string, granularity: 'day' | 'week' | 'month'): string => {
+  if (granularity === 'week') return getWeekStartDate(dateStr);
+  if (granularity === 'month') return getMonthKey(dateStr);
+  return dateStr;
+};
+
+// X-axis tick label for a group key. Week keys are the Monday date (YYYY-MM-DD);
+// month keys are YYYY-MM.
+export const formatChartGroupLabel = (key: string, granularity: 'day' | 'week' | 'month'): string => {
+  if (granularity === 'month') {
+    const [year, month] = key.split('-');
+    return `${year}/${month}`;
+  }
+  return key.substring(5); // MM-DD
+};
+
 // --- Google Sign-In Helpers ---
 
 /**
