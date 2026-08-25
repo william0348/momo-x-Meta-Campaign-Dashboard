@@ -299,8 +299,59 @@ const sleep = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
 
 const RATE_LIMIT_CODES = new Set([4, 17, 32, 613, 80000, 80003, 80004]);
 
+// Tracks the app/account's live rate-limit usage (from X-App-Usage / X-Ad-Account-Usage
+// response headers) so we can slow down *before* hitting a hard 429/rate-limit error,
+// and so the UI can show the user how close they are to being throttled.
+export interface FbRateLimitUsage {
+    callCount: number;   // % of app-level call quota used
+    cpuTime: number;     // % of app-level CPU time used
+    totalTime: number;   // % of app-level total time used
+    accUtilPct: number;  // % of ad-account-level quota used
+    updatedAt: number;   // Date.now() of last update
+}
+
+let _fbLatestUsage: FbRateLimitUsage = { callCount: 0, cpuTime: 0, totalTime: 0, accUtilPct: 0, updatedAt: 0 };
+let _fbRateLimitCallback: ((u: FbRateLimitUsage) => void) | null = null;
+
+export const setFbRateLimitCallback = (cb: ((u: FbRateLimitUsage) => void) | null) => {
+    _fbRateLimitCallback = cb;
+};
+
+export const getFbRateLimitUsage = (): FbRateLimitUsage => _fbLatestUsage;
+
+const parseFbRateLimitHeaders = (response: Response) => {
+    try {
+        const appUsage = response.headers.get('X-App-Usage');
+        const acctUsage = response.headers.get('X-Ad-Account-Usage');
+        if (!appUsage && !acctUsage) return;
+
+        const next = { ..._fbLatestUsage };
+        if (appUsage) {
+            const p = JSON.parse(appUsage);
+            next.callCount = p.call_count ?? next.callCount;
+            next.cpuTime = p.total_cputime ?? next.cpuTime;
+            next.totalTime = p.total_time ?? next.totalTime;
+        }
+        if (acctUsage) {
+            const p = JSON.parse(acctUsage);
+            next.accUtilPct = p.acc_id_util_pct ?? next.accUtilPct;
+        }
+        next.updatedAt = Date.now();
+        _fbLatestUsage = next;
+        _fbRateLimitCallback?.(next);
+    } catch (_) { /* header missing or malformed — ignore */ }
+};
+
+// Extra delay layered on top of the base inter-request delay once usage climbs,
+// so we back off gradually instead of only reacting after a 429.
+const fbAutoSlowdownDelay = (): number => {
+    const worst = Math.max(_fbLatestUsage.callCount, _fbLatestUsage.cpuTime, _fbLatestUsage.totalTime, _fbLatestUsage.accUtilPct);
+    return worst > 75 ? 4000 : worst > 50 ? 2000 : 0;
+};
+
 const fetchPage = async (url: string, attempt = 0): Promise<any> => {
     const response = await fetch(url);
+    parseFbRateLimitHeaders(response);
     const json = await response.json();
 
     if (!response.ok || json.error) {
@@ -338,15 +389,25 @@ export const fetchFacebookInsights = async (accessToken: string, adAccountId: st
     // Basic fields configuration - Removed 'reach', added 'omni_purchase' via actions
     const fields = 'campaign_id,campaign_name,spend,impressions,actions';
     const filtering = encodeURIComponent(JSON.stringify([{ field: "action_type", operator: "IN", value: ["link_click", "omni_purchase"] }]));
-    
-    // Determine the full range to fetch
-    // If no dates provided, fallback to maximum (not recommended for large accounts)
-    if (!startDate || !endDate) {
-        // Fallback for no date selection (risky for large data)
-        const url = `https://graph.facebook.com/v19.0/act_${adAccountId}/insights?level=campaign&fields=${fields}&time_increment=1&filtering=${filtering}&date_preset=maximum&access_token=${accessToken}&limit=500`;
-        const result = await fetchAllPages(url);
-        return processFbRawData(result);
+
+    // Determine the full range to fetch. If no dates provided (e.g. first-time full
+    // historical backfill when the sheet has no data yet), resolve the account's
+    // actual creation date and chunk from there — a single date_preset=maximum
+    // request with no chunking is what was slamming large accounts into rate limits.
+    const isFullBackfill = !startDate || !endDate;
+    if (isFullBackfill) {
+        const acctUrl = `https://graph.facebook.com/v19.0/act_${adAccountId}?fields=created_time&access_token=${accessToken}`;
+        const acctInfo = await fetchPage(acctUrl);
+        startDate = (acctInfo.created_time || '').slice(0, 10) || addDaysToDate(new Date().toISOString().split('T')[0], -730);
+        endDate = new Date().toISOString().split('T')[0];
     }
+
+    // A full backfill breaks down by date AND campaign, so each window returns far
+    // more rows than an incremental sync — use smaller windows, a smaller page size,
+    // and a longer gap between requests to stay well under the rate limit.
+    const chunkDays = isFullBackfill ? 7 : 30;
+    const pageLimit = isFullBackfill ? 200 : 500;
+    const baseChunkDelay = isFullBackfill ? 3000 : 1500;
 
     // --- Date Chunking Logic ---
     let allRawData: any[] = [];
@@ -354,17 +415,17 @@ export const fetchFacebookInsights = async (accessToken: string, adAccountId: st
     const finalDate = new Date(endDate);
 
     while (new Date(currentChunkStart) <= finalDate) {
-        // Define chunk end (Start + 30 days)
-        let currentChunkEnd = addDaysToDate(currentChunkStart, 30);
-        
+        // Define chunk end (Start + chunkDays)
+        let currentChunkEnd = addDaysToDate(currentChunkStart, chunkDays);
+
         // Cap chunk end at the final requested end date
         if (new Date(currentChunkEnd) > finalDate) {
             currentChunkEnd = endDate;
         }
 
         const timeRange = `&time_range={"since":"${currentChunkStart}","until":"${currentChunkEnd}"}`;
-        const url = `https://graph.facebook.com/v19.0/act_${adAccountId}/insights?level=campaign&fields=${fields}&time_increment=1&filtering=${filtering}${timeRange}&access_token=${accessToken}&limit=500`;
-        
+        const url = `https://graph.facebook.com/v19.0/act_${adAccountId}/insights?level=campaign&fields=${fields}&time_increment=1&filtering=${filtering}${timeRange}&access_token=${accessToken}&limit=${pageLimit}`;
+
         // Fetch all pages for this chunk
         const chunkData = await fetchAllPages(url);
         allRawData = allRawData.concat(chunkData);
@@ -372,9 +433,9 @@ export const fetchFacebookInsights = async (accessToken: string, adAccountId: st
         // Move to next day after current chunk
         currentChunkStart = addDaysToDate(currentChunkEnd, 1);
 
-        // Delay between chunks to avoid rate limiting
+        // Delay between chunks to avoid rate limiting — scales up as usage climbs
         if (new Date(currentChunkStart) <= finalDate) {
-            await sleep(1500);
+            await sleep(baseChunkDelay + fbAutoSlowdownDelay());
         }
     }
     
@@ -397,6 +458,9 @@ const fetchAllPages = async (initialUrl: string): Promise<any[]> => {
             allData = allData.concat(result.data);
         }
         url = result.paging?.next;
+        // Delay between pages — previously fired back-to-back with zero delay,
+        // which is what drove the account straight into rate limiting on large ranges.
+        if (url) await sleep(300 + fbAutoSlowdownDelay());
     }
     return allData;
 };
